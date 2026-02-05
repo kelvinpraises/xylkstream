@@ -2,7 +2,6 @@ import cors from "cors";
 import dotenv from "dotenv";
 import express from "express";
 
-import yieldOptimizerCron from "@/infrastructure/cron/vesting/yield-optimizer";
 import eventRecoveryCron from "@/infrastructure/cron/system/event-recovery";
 import pluginCleanupCron from "@/infrastructure/cron/system/plugin-cleanup";
 import pluginDiscoveryCron from "@/infrastructure/cron/system/plugin-discovery";
@@ -37,7 +36,6 @@ app.listen(BACKEND_PORT, async () => {
 
   // Start crons
   eventRecoveryCron.start();
-  yieldOptimizerCron.start();
   pluginCleanupCron.start();
   pluginDiscoveryCron.start();
 });
