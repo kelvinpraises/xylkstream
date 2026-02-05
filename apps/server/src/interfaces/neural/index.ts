@@ -132,76 +132,6 @@ export const neuralAgent = {
   },
 
   /**
-   * Optimize yield on idle account funds
-   */
-  async optimizeAccountYield(accountId: number): Promise<void> {
-    const account = await accountService.getAccount(accountId);
-    const policy = account.policy_json;
-    const pluginIds = policy.plugins || [];
-
-    if (pluginIds.length === 0) {
-      console.log(`[neural] No plugins attached to account ${accountId}, skipping optimization`);
-      return;
-    }
-
-    const pluginPorts = await Promise.all(
-      pluginIds.map((pluginId) =>
-        pluginService.getOrServePlugin(accountId, pluginId, {}),
-      ),
-    );
-
-    const mcpServers = Object.fromEntries(
-      pluginIds.map((pluginId, index) => [
-        pluginId,
-        { url: new URL(`http://localhost:${pluginPorts[index].port}/mcp`) },
-      ]),
-    );
-    const pluginsMCP = new MCPClient({
-      id: `yield-optimize-${accountId}-${Date.now()}`,
-      servers: mcpServers,
-    });
-
-    const requestContext = new RequestContext();
-    requestContext.set("accountId", accountId);
-
-    const abortController = new AbortController();
-    const taskKey = `yield-${accountId}`;
-    runningAgentTasks.set(taskKey, abortController);
-
-    const systemPrompt = buildYieldOptimizationPrompt({
-      policyPrompt: policy.prompt || "Optimize yield while maintaining liquidity.",
-      accountId,
-      pluginIds,
-      riskTolerance: policy.risk_tolerance || "medium",
-    });
-
-    try {
-      const agent = mastra.getAgent("vestingAgent");
-      await agent.generate(
-        [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: "Optimize yield on idle funds." },
-        ],
-        {
-          toolsets: await pluginsMCP.listToolsets(),
-          requestContext,
-          abortSignal: abortController.signal,
-          memory: {
-            resource: `account-${accountId}`,
-            thread: "yield-optimization",
-          },
-        },
-      );
-    } catch (error) {
-      if (error instanceof Error && error.name !== "AbortError") {
-        console.error(`[neural] Error optimizing yield for account ${accountId}:`, error);
-      }
-    } finally {
-      runningAgentTasks.delete(taskKey);
-    }
-  },
-
-  /**
    * Handle user feedback on agent work
    */
   async handleUserFeedback(
@@ -210,7 +140,7 @@ export const neuralAgent = {
     feedback: string,
   ): Promise<void> {
     // Interrupt current task if running
-    const taskKey = streamId ? `stream-${streamId}` : `yield-${accountId}`;
+    const taskKey = streamId ? `stream-${streamId}` : `account-${accountId}`;
     this.interruptAgentTask(taskKey);
 
     const account = await accountService.getAccount(accountId);
@@ -255,7 +185,7 @@ export const neuralAgent = {
     }
 
     const systemPrompt = buildUserFeedbackPrompt({
-      goal: streamId ? "Create vesting stream" : "Optimize account yield",
+      goal: streamId ? "Create vesting stream" : "Complete your current task",
       accountId,
       streamId: streamId ?? undefined,
       currentState,
@@ -275,7 +205,7 @@ export const neuralAgent = {
           abortSignal: abortController.signal,
           memory: {
             resource: `account-${accountId}`,
-            thread: streamId?.toString() || "yield-optimization",
+            thread: streamId?.toString() || "general",
           },
         },
       );
@@ -349,7 +279,7 @@ export const neuralAgent = {
         requestContext,
         memory: {
           resource: `account-${accountId}`,
-          thread: streamId?.toString() || "yield-optimization",
+          thread: streamId?.toString() || "scheduled-task",
         },
       },
     );
