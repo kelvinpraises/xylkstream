@@ -1,0 +1,16 @@
+**/.DS_Store
+**/Thumbs.db
+**/.claude
+**/CLAUDE.md
+**/GEMINI.md
+**/.kiro
+.env.**
+
+# Build outputs
+**/dist/
+**/build/
+
+# Dependencies
+**/node_modules/
+
+context
