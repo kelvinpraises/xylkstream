@@ -1,0 +1,6 @@
+[submodule "apps/contracts/evm/lib/forge-std"]
+	path = apps/contracts/evm/lib/forge-std
+	url = https://github.com/brockelmore/forge-std
+[submodule "apps/contracts/evm/lib/openzeppelin-contracts"]
+	path = apps/contracts/evm/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
