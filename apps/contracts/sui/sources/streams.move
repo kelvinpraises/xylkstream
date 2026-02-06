@@ -2,16 +2,12 @@ module xylkstream::streams;
 
 use movemate::i128::{Self, I128};
 use movemate::i256::{Self, I256};
-use std::vector;
 use sui::bcs;
 use sui::clock::{Self, Clock};
 use sui::dynamic_field;
 use sui::event;
 use sui::hash;
-use sui::object::{Self, UID, ID};
 use sui::table::{Self, Table};
-use sui::transfer;
-use sui::tx_context::{Self, TxContext};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              CONSTANTS
@@ -20,20 +16,11 @@ use sui::tx_context::{Self, TxContext};
 /// Maximum number of streams receivers of a single account
 const MAX_STREAMS_RECEIVERS: u64 = 100;
 
-/// Additional decimals for all amt_per_sec values
-const AMT_PER_SEC_EXTRA_DECIMALS: u8 = 9;
-
 /// Multiplier for all amt_per_sec values (10^AMT_PER_SEC_EXTRA_DECIMALS)
 const AMT_PER_SEC_MULTIPLIER: u256 = 1_000_000_000;
 
-/// Maximum streams balance (2^127 - 1)
-const MAX_STREAMS_BALANCE: u128 = 170141183460469231731687303715884105727;
-
 /// Maximum u64 value
 const MAX_U64: u64 = 18446744073709551615;
-
-/// Default cycle length in seconds (1 week)
-const DEFAULT_CYCLE_SECS: u64 = 604800;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              ERROR CODES
@@ -62,7 +49,7 @@ const E_TIMESTAMP_BEFORE_UPDATE: u64 = 8;
 
 /// Global shared registry for streams state per token type
 /// Type parameter T represents the Coin type (e.g., Coin<SUI>, Coin<USDC>)
-struct StreamsRegistry<phantom T> has key {
+public struct StreamsRegistry<phantom T> has key {
     id: UID,
     /// Cycle length in seconds (set once at initialization, must be > 1)
     cycle_secs: u64,
@@ -74,7 +61,8 @@ struct StreamsRegistry<phantom T> has key {
 
 /// Per-account streams state
 /// Note: nested tables (next_squeezed, amt_deltas) stored as dynamic fields
-struct StreamsState has store {
+#[allow(lint(missing_key))]
+public struct StreamsState has store {
     id: UID,
     /// Hash of streams history for squeeze validation
     streams_history_hash: vector<u8>,
@@ -96,25 +84,25 @@ struct StreamsState has store {
 }
 
 /// Key for next_squeezed mapping
-struct NextSqueezedKey has copy, drop, store {
+public struct NextSqueezedKey has copy, drop, store {
     sender_account_id: u256,
     config_index: u64,
 }
 
 /// Delta amounts applied to cycles
-struct AmtDelta has copy, drop, store {
+public struct AmtDelta has copy, drop, store {
     this_cycle: I128,
     next_cycle: I128,
 }
 
 /// Stream receiver configuration
-struct StreamReceiver has copy, drop, store {
+public struct StreamReceiver has copy, drop, store {
     account_id: u256,
     config: StreamConfig,
 }
 
 /// Stream configuration settings
-struct StreamConfig has copy, drop, store {
+public struct StreamConfig has copy, drop, store {
     stream_id: u64,
     amt_per_sec: u256,
     start: u64,
@@ -122,7 +110,7 @@ struct StreamConfig has copy, drop, store {
 }
 
 /// History entry for squeezing
-struct StreamsHistory has copy, drop, store {
+public struct StreamsHistory has copy, drop, store {
     streams_hash: vector<u8>,
     receivers: vector<StreamReceiver>,
     update_time: u64,
@@ -130,7 +118,7 @@ struct StreamsHistory has copy, drop, store {
 }
 
 /// Preprocessed stream config for balance calculations
-struct ProcessedConfig has copy, drop, store {
+public struct ProcessedConfig has copy, drop, store {
     amt_per_sec: u256,
     start: u64,
     end: u64,
@@ -142,7 +130,7 @@ struct ProcessedConfig has copy, drop, store {
 
 /// Emitted when a new StreamsRegistry is created for a token type
 /// Indexer tracks this to provide registry object IDs to clients
-struct RegistryCreated<phantom T> has copy, drop {
+public struct RegistryCreated<phantom T> has copy, drop {
     registry_id: ID,
     cycle_secs: u64,
     min_amt_per_sec: u256,
@@ -154,7 +142,7 @@ struct RegistryCreated<phantom T> has copy, drop {
 
 /// Module initializer - creates shared registry with default cycle length
 /// Called automatically when module is published
-fun init(ctx: &mut TxContext) {}
+fun init(_ctx: &mut TxContext) {}
 
 /// Creates and shares a new StreamsRegistry for a specific token type
 /// Should be called once per token type (SUI, USDC, etc.)
@@ -201,6 +189,27 @@ public fun new_stream_receiver(
         account_id,
         config: StreamConfig { stream_id, amt_per_sec, start, duration },
     }
+}
+
+/// Accessor functions for StreamReceiver
+public fun stream_receiver_account_id(receiver: &StreamReceiver): u256 {
+    receiver.account_id
+}
+
+public fun stream_receiver_stream_id(receiver: &StreamReceiver): u64 {
+    receiver.config.stream_id
+}
+
+public fun stream_receiver_amt_per_sec(receiver: &StreamReceiver): u256 {
+    receiver.config.amt_per_sec
+}
+
+public fun stream_receiver_start(receiver: &StreamReceiver): u64 {
+    receiver.config.start
+}
+
+public fun stream_receiver_duration(receiver: &StreamReceiver): u64 {
+    receiver.config.duration
 }
 
 /// Creates a new StreamsHistory entry
@@ -258,7 +267,7 @@ fun stream_range(
     } else {
         config.start
     };
-    let stream_end = stream_start + config.duration;
+    let mut stream_end = stream_start + config.duration;
 
     // If duration is 0 (forever) or exceeds max_end, cap to max_end
     if (stream_end == stream_start || stream_end > max_end) {
@@ -332,9 +341,9 @@ fun process_cycles(
     received_amt: u128,
     amt_per_cycle: I128,
 ): (u128, I128) {
-    let cycle = from_cycle;
-    let acc_received = received_amt;
-    let acc_rate = amt_per_cycle;
+    let mut cycle = from_cycle;
+    let mut acc_received = received_amt;
+    let mut acc_rate = amt_per_cycle;
 
     // Borrow amt_deltas table from dynamic field
     let amt_deltas = dynamic_field::borrow<vector<u8>, Table<u64, AmtDelta>>(
@@ -369,7 +378,15 @@ public fun hash_streams(receivers: &vector<StreamReceiver>): vector<u8> {
         return vector::empty<u8>()
     };
     let bytes = bcs::to_bytes(receivers);
-    vector::from_slice(&hash::blake2b256(&bytes), 0, 32)
+    let hash_array = hash::blake2b256(&bytes);
+    // Convert [u8; 32] to vector<u8>
+    let mut result = vector::empty<u8>();
+    let mut i = 0;
+    while (i < 32) {
+        vector::push_back(&mut result, hash_array[i]);
+        i = i + 1;
+    };
+    result
 }
 
 /// Calculates the hash of the streams history after configuration update
@@ -380,12 +397,20 @@ public fun hash_streams_history(
     update_time: u64,
     max_end: u64,
 ): vector<u8> {
-    let data = vector::empty<u8>();
+    let mut data = vector::empty<u8>();
     vector::append(&mut data, *old_streams_history_hash);
     vector::append(&mut data, *streams_hash);
     vector::append(&mut data, bcs::to_bytes(&update_time));
     vector::append(&mut data, bcs::to_bytes(&max_end));
-    vector::from_slice(&hash::blake2b256(&data), 0, 32)
+    let hash_array = hash::blake2b256(&data);
+    // Convert [u8; 32] to vector<u8>
+    let mut result = vector::empty<u8>();
+    let mut i = 0;
+    while (i < 32) {
+        vector::push_back(&mut result, hash_array[i]);
+        i = i + 1;
+    };
+    result
 }
 
 /// Builds a preprocessed list of stream configurations from receivers
@@ -399,11 +424,11 @@ fun build_configs<T>(
     let len = vector::length(receivers);
     assert!(len <= MAX_STREAMS_RECEIVERS, E_TOO_MANY_RECEIVERS);
 
-    let configs = vector::empty<ProcessedConfig>();
+    let mut configs = vector::empty<ProcessedConfig>();
     let min_amt = registry.min_amt_per_sec;
     let curr_ts = curr_timestamp(clock);
 
-    let i = 0;
+    let mut i = 0;
     while (i < len) {
         let receiver = vector::borrow(receivers, i);
 
@@ -451,10 +476,10 @@ fun verify_streams_history(
     final_history_hash: &vector<u8>,
 ): vector<vector<u8>> {
     let len = vector::length(streams_history);
-    let history_hashes = vector::empty<vector<u8>>();
-    let current_hash = history_hash;
+    let mut history_hashes = vector::empty<vector<u8>>();
+    let mut current_hash = history_hash;
 
-    let i = 0;
+    let mut i = 0;
     while (i < len) {
         let entry = vector::borrow(streams_history, i);
 
@@ -501,7 +526,7 @@ fun add_delta(
     timestamp: u64,
     amt_per_sec: I256,
     cycle_secs: u64,
-    ctx: &mut TxContext,
+    _ctx: &mut TxContext,
 ) {
     let multiplier = i256::from((AMT_PER_SEC_MULTIPLIER as u256));
 
@@ -588,14 +613,14 @@ fun update_receiver_states<T>(
 ) {
     let curr_len = vector::length(curr_receivers);
     let new_len = vector::length(new_receivers);
-    let curr_idx: u64 = 0;
-    let new_idx: u64 = 0;
+    let mut curr_idx: u64 = 0;
+    let mut new_idx: u64 = 0;
     let cycle_secs = registry.cycle_secs;
     let curr_ts = curr_timestamp(clock);
 
     loop {
-        let pick_curr = curr_idx < curr_len;
-        let pick_new = new_idx < new_len;
+        let mut pick_curr = curr_idx < curr_len;
+        let mut pick_new = new_idx < new_len;
 
         // Get current receiver if available
         let curr_recv = if (pick_curr) {
@@ -743,7 +768,7 @@ fun ensure_state_exists(
     ctx: &mut TxContext,
 ) {
     if (!table::contains(states, account_id)) {
-        let state_id = object::new(ctx);
+        let mut state_id = object::new(ctx);
 
         // Create nested tables as dynamic fields
         dynamic_field::add(
@@ -814,9 +839,9 @@ fun calc_balance(
     receivers: &vector<StreamReceiver>,
     timestamp: u64,
 ): u128 {
-    let balance = (last_balance as u256);
+    let mut balance = (last_balance as u256);
     let len = vector::length(receivers);
-    let i = 0;
+    let mut i = 0;
 
     while (i < len) {
         let receiver = vector::borrow(receivers, i);
@@ -861,8 +886,8 @@ public fun calc_max_end<T>(
     };
 
     // Use u256 for arithmetic to avoid overflow
-    let enough_end: u256 = (min_guaranteed_end as u256);
-    let not_enough_end: u256 = (max_possible_end as u256);
+    let mut enough_end: u256 = (min_guaranteed_end as u256);
+    let mut not_enough_end: u256 = (max_possible_end as u256);
 
     if ((hint1 as u256) > enough_end && (hint1 as u256) < not_enough_end) {
         if (is_balance_enough(balance, &configs, hint1)) {
@@ -900,10 +925,10 @@ fun is_balance_enough(
     configs: &vector<ProcessedConfig>,
     max_end: u64,
 ): bool {
-    let spent: u256 = 0;
+    let mut spent: u256 = 0;
     let balance_u256 = (balance as u256);
     let len = vector::length(configs);
-    let i = 0;
+    let mut i = 0;
 
     while (i < len) {
         let (amt_per_sec, start, end) = get_config(configs, i);
@@ -1050,7 +1075,7 @@ public(package) fun receive_streams<T>(
             b"amt_deltas",
         );
 
-        let cycle = from_cycle;
+        let mut cycle = from_cycle;
         while (cycle < to_cycle) {
             if (table::contains(amt_deltas, cycle)) {
                 table::remove(amt_deltas, cycle);
@@ -1122,7 +1147,7 @@ public(package) fun squeeze_streams<T>(
     );
 
     let squeezed_len = vector::length(&squeezed_indexes);
-    let i = 0;
+    let mut i = 0;
     while (i < squeezed_len) {
         let idx = *vector::borrow(&squeezed_indexes, i);
         let config_index = curr_cycle_configs - idx;
@@ -1194,13 +1219,13 @@ public fun squeeze_streams_result<T>(
         } else { 1 }
     } else { 1 };
 
-    let amt: u128 = 0;
-    let squeezed_indexes = vector::empty<u64>();
-    let squeeze_end_cap = curr_timestamp(clock);
+    let mut amt: u128 = 0;
+    let mut squeezed_indexes = vector::empty<u64>();
+    let mut squeeze_end_cap = curr_timestamp(clock);
     let history_len = vector::length(streams_history);
 
     // Process history entries from newest to oldest (up to curr_cycle_configs)
-    let i: u64 = 1;
+    let mut i: u64 = 1;
     while (i <= history_len && i <= curr_cycle_configs) {
         let entry_idx = history_len - i;
         let entry = vector::borrow(streams_history, entry_idx);
@@ -1251,8 +1276,8 @@ public fun squeeze_streams_result<T>(
     };
 
     // Reverse squeezed_indexes to be oldest-to-newest
-    let reversed = vector::empty<u64>();
-    let j = vector::length(&squeezed_indexes);
+    let mut reversed = vector::empty<u64>();
+    let mut j = vector::length(&squeezed_indexes);
     while (j > 0) {
         j = j - 1;
         vector::push_back(&mut reversed, *vector::borrow(&squeezed_indexes, j));
@@ -1272,8 +1297,8 @@ fun squeezed_amt(
     let receivers_len = vector::length(receivers);
 
     // Binary search for the first occurrence of account_id
-    let idx: u64 = 0;
-    let idx_cap = receivers_len;
+    let mut idx: u64 = 0;
+    let mut idx_cap = receivers_len;
     while (idx < idx_cap) {
         let idx_mid = (idx + idx_cap) / 2;
         if (vector::borrow(receivers, idx_mid).account_id < account_id) {
@@ -1285,7 +1310,7 @@ fun squeezed_amt(
 
     let update_time = history_entry.update_time;
     let max_end = history_entry.max_end;
-    let amt: u256 = 0;
+    let mut amt: u256 = 0;
 
     // Sum up all streams to this account_id
     while (idx < receivers_len) {
