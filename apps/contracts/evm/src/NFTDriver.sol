@@ -229,6 +229,43 @@ contract NFTDriver is ERC721URIStorage, DriverTransferUtils, Managed {
         if (amt > 0) drips.withdraw(erc20, transferTo, amt);
     }
 
+    /// @notice Force collect - for when funds are in YieldManager instead of Drips vault
+    /// @dev Single entry point that enforces atomicity by calling both Drips and strategy
+    /// @param tokenId The ID of the token representing the collecting account ID.
+    /// The caller must be the owner of the token or be approved to use it.
+    /// @param erc20 The used ERC-20 token.
+    /// @param yieldManager The YieldManager contract address.
+    /// @param strategy The strategy address where funds are invested.
+    /// @param transferTo The address to send collected funds to.
+    /// @param strategyData Strategy-specific data for withdrawal.
+    /// @return amt The collected amount
+    function forceCollect(
+        uint256 tokenId,
+        IERC20 erc20,
+        address yieldManager,
+        address strategy,
+        address transferTo,
+        bytes calldata strategyData
+    ) public whenNotPaused onlyHolder(tokenId) returns (uint128 amt) {
+        // Step 1: Force collect (creates state in YieldManager)
+        amt = drips.forceCollect(tokenId, erc20, yieldManager, strategy, transferTo);
+
+        // Step 2: Call strategy to execute withdrawal
+        // Strategy MUST call yieldManager.completeForceWithdraw()
+        (bool success,) = strategy.call(
+            abi.encodeWithSignature(
+                "forceWithdraw(address,uint256,uint128,bytes)",
+                yieldManager,
+                tokenId,
+                amt,
+                strategyData
+            )
+        );
+        require(success, "Strategy withdrawal failed");
+
+        // Both steps atomic: if strategy fails, entire transaction reverts
+    }
+
     /// @notice Gives funds from the account to the receiver.
     /// The receiver can split and collect them immediately.
     /// Transfers the funds to be given from the message sender's wallet to the Drips contract.
@@ -443,6 +480,11 @@ contract NFTDriver is ERC721URIStorage, DriverTransferUtils, Managed {
     // slither-disable-next-line dead-code
     function _msgData() internal view override(Context, ERC2771Context) returns (bytes calldata) {
         return ERC2771Context._msgData();
+    }
+
+    // Workaround for https://github.com/ethereum/solidity/issues/12554
+    function _contextSuffixLength() internal view override(Context, ERC2771Context) returns (uint256) {
+        return ERC2771Context._contextSuffixLength();
     }
 
     /// @notice Returns the NFTDriver storage.

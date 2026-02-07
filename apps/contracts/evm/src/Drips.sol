@@ -10,6 +10,16 @@ import {IERC20, SafeERC20} from "openzeppelin-contracts/token/ERC20/utils/SafeER
 
 using SafeERC20 for IERC20;
 
+/// @notice Interface for YieldManager contract
+interface IYieldManager {
+    function dripsForceWithdraw(
+        uint256 accountId,
+        address strategy,
+        uint128 amount,
+        address transferTo
+    ) external;
+}
+
 /// @notice The account metadata.
 /// The key and the value are not standardized by the protocol, it's up to the users
 /// to establish and follow conventions to ensure compatibility with the consumers.
@@ -526,8 +536,73 @@ contract Drips is Managed, Streams, Splits {
         onlyDriver(accountId)
         returns (uint128 amt)
     {
+        // Check collectable amount first
+        uint128 collectableAmt = Splits._collectable(accountId, erc20);
+        
+        // Check if Drips vault has enough coins to fulfill the collection
+        if (collectableAmt > 0) {
+            (uint128 streamsBalance, uint128 splitsBalance) = balances(erc20);
+            uint256 heldBalance = _tokenBalance(erc20);
+            uint256 managedBalance = uint256(streamsBalance) + uint256(splitsBalance);
+            require(heldBalance >= managedBalance, "Token balance too low");
+            uint128 withdrawable = uint128(heldBalance - managedBalance);
+            
+            // If vault doesn't have enough, suggest using forceCollect
+            require(
+                collectableAmt <= withdrawable,
+                "Insufficient vault balance. Use forceCollect to withdraw from YieldManager"
+            );
+        }
+        
         amt = Splits._collect(accountId, erc20);
         if (amt != 0) _decreaseSplitsBalance(erc20, amt);
+    }
+
+    /// @notice Force collect - for when funds are in YieldManager instead of Drips vault
+    /// @dev Checks if Drips vault has enough coins first, reverts if it does
+    /// @dev Creates withdrawal state in YieldManager that must be consumed by calling strategy
+    /// @param accountId The account ID.
+    /// @param erc20 The used ERC-20 token.
+    /// @param yieldManager The YieldManager contract address.
+    /// @param strategy The strategy address where funds are invested.
+    /// @param transferTo The address to send collected funds to.
+    /// @return amt The collected amount
+    function forceCollect(
+        uint256 accountId,
+        IERC20 erc20,
+        address yieldManager,
+        address strategy,
+        address transferTo
+    )
+        public
+        whenNotPaused
+        onlyDriver(accountId)
+        returns (uint128 amt)
+    {
+        // 1. Check collectable amount
+        uint128 collectableAmt = Splits._collectable(accountId, erc20);
+
+        // 2. Check if Drips vault has enough coins
+        (uint128 streamsBalance, uint128 splitsBalance) = balances(erc20);
+        uint256 heldBalance = _tokenBalance(erc20);
+        uint256 managedBalance = uint256(streamsBalance) + uint256(splitsBalance);
+        require(heldBalance >= managedBalance, "Token balance too low");
+        uint128 withdrawable = uint128(heldBalance - managedBalance);
+
+        // 3. If Drips has enough, user should use normal collect
+        require(collectableAmt > withdrawable, "Use normal collect");
+
+        // 4. Do accounting (collect)
+        amt = Splits._collect(accountId, erc20);
+        if (amt != 0) _decreaseSplitsBalance(erc20, amt);
+
+        // 5. Create withdrawal state in YieldManager
+        IYieldManager(yieldManager).dripsForceWithdraw(
+            accountId,
+            strategy,
+            amt,
+            transferTo
+        );
     }
 
     /// @notice Gives funds from the account to the receiver.

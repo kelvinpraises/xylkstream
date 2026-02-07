@@ -18,7 +18,11 @@ contract AddressDriver is DriverTransferUtils, Managed {
     /// @param drips_ The Drips contract to use.
     /// @param forwarder The ERC-2771 forwarder to trust. May be the zero address.
     /// @param driverId_ The driver ID to use when calling Drips.
-    constructor(Drips drips_, address forwarder, uint32 driverId_) DriverTransferUtils(forwarder) {
+    constructor(
+        Drips drips_,
+        address forwarder,
+        uint32 driverId_
+    ) DriverTransferUtils(forwarder) {
         drips = drips_;
         driverId = driverId_;
     }
@@ -60,8 +64,47 @@ contract AddressDriver is DriverTransferUtils, Managed {
     /// If you use such tokens in the protocol, they can get stuck or lost.
     /// @param transferTo The address to send collected funds to
     /// @return amt The collected amount
-    function collect(IERC20 erc20, address transferTo) public whenNotPaused returns (uint128 amt) {
+    function collect(
+        IERC20 erc20,
+        address transferTo
+    ) public whenNotPaused returns (uint128 amt) {
         return _collectAndTransfer(_callerAccountId(), erc20, transferTo);
+    }
+
+    /// @notice Force collect - for when funds are in YieldManager instead of Drips vault
+    /// @dev Single entry point that enforces atomicity by calling both Drips and strategy
+    /// @param erc20 The used ERC-20 token.
+    /// @param yieldManager The YieldManager contract address.
+    /// @param strategy The strategy address where funds are invested.
+    /// @param transferTo The address to send collected funds to.
+    /// @param strategyData Strategy-specific data for withdrawal.
+    /// @return amt The collected amount
+    function forceCollect(
+        IERC20 erc20,
+        address yieldManager,
+        address strategy,
+        address transferTo,
+        bytes calldata strategyData
+    ) public whenNotPaused returns (uint128 amt) {
+        uint256 accountId = _callerAccountId();
+
+        // Step 1: Force collect (creates state in YieldManager)
+        amt = drips.forceCollect(accountId, erc20, yieldManager, strategy, transferTo);
+
+        // Step 2: Call strategy to execute withdrawal
+        // Strategy MUST call yieldManager.completeForceWithdraw()
+        (bool success, ) = strategy.call(
+            abi.encodeWithSignature(
+                "forceWithdraw(address,uint256,uint128,bytes)",
+                yieldManager,
+                accountId,
+                amt,
+                strategyData
+            )
+        );
+        require(success, "Strategy withdrawal failed");
+
+        // Both steps atomic: if strategy fails, entire transaction reverts
     }
 
     /// @notice Gives funds from the message sender to the receiver.
@@ -129,16 +172,17 @@ contract AddressDriver is DriverTransferUtils, Managed {
         uint32 maxEndHint2,
         address transferTo
     ) public whenNotPaused returns (int128 realBalanceDelta) {
-        return _setStreamsAndTransfer(
-            _callerAccountId(),
-            erc20,
-            currReceivers,
-            balanceDelta,
-            newReceivers,
-            maxEndHint1,
-            maxEndHint2,
-            transferTo
-        );
+        return
+            _setStreamsAndTransfer(
+                _callerAccountId(),
+                erc20,
+                currReceivers,
+                balanceDelta,
+                newReceivers,
+                maxEndHint1,
+                maxEndHint2,
+                transferTo
+            );
     }
 
     /// @notice Sets the account splits configuration.
@@ -166,7 +210,9 @@ contract AddressDriver is DriverTransferUtils, Managed {
     /// The keys and the values are not standardized by the protocol, it's up to the users
     /// to establish and follow conventions to ensure compatibility with the consumers.
     /// @param accountMetadata The list of account metadata.
-    function emitAccountMetadata(AccountMetadata[] calldata accountMetadata) public whenNotPaused {
+    function emitAccountMetadata(
+        AccountMetadata[] calldata accountMetadata
+    ) public whenNotPaused {
         drips.emitAccountMetadata(_callerAccountId(), accountMetadata);
     }
 }
