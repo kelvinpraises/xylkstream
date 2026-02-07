@@ -42,7 +42,8 @@ public struct DripsRegistry<phantom T> has key {
     /// The balance of each account currently stored in the protocol
     /// Maps account_id -> Balance
     balances: Table<u256, Balance>,
-    // Vault coin stored as dynamic field: b"vault" -> Coin<T>
+    /// Vault holding all tokens
+    vault: Coin<T>,
 }
 
 /// The balance currently stored in the protocol per account.
@@ -140,16 +141,13 @@ public fun create_drips_registry<T>(ctx: &mut TxContext) {
     splits::create_registry<T>(ctx);
 
     // Create drips registry
-    let mut registry_id_obj = sui::object::new(ctx);
+    let registry_id_obj = sui::object::new(ctx);
     let registry_id = sui::object::uid_to_inner(&registry_id_obj);
-
-    // Initialize empty vault coin
-    let vault_coin = coin::zero<T>(ctx);
-    dynamic_field::add(&mut registry_id_obj, b"vault", vault_coin);
 
     let registry = DripsRegistry<T> {
         id: registry_id_obj,
         balances: table::new(ctx),
+        vault: coin::zero<T>(ctx),
     };
 
     // Emit event for indexer
@@ -173,8 +171,7 @@ fun ensure_balance_exists(balances_table: &mut Table<u256, Balance>, account_id:
 
 /// Returns the token balance held by the Drips vault
 fun token_balance<T>(registry: &DripsRegistry<T>): u128 {
-    let vault_coin = dynamic_field::borrow<vector<u8>, Coin<T>>(&registry.id, b"vault");
-    (coin::value(vault_coin) as u128)
+    (coin::value(&registry.vault) as u128)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -303,22 +300,14 @@ public(package) fun withdraw<T>(
     assert!(amt <= withdrawable, E_WITHDRAWAL_AMOUNT_TOO_HIGH);
 
     // Split coins from vault and transfer
-    let vault_coin = dynamic_field::borrow_mut<vector<u8>, Coin<T>>(
-        &mut registry.id,
-        b"vault",
-    );
-    let payment = coin::split(vault_coin, (amt as u64), ctx);
+    let payment = coin::split(&mut registry.vault, (amt as u64), ctx);
     sui::transfer::public_transfer(payment, receiver);
 }
 
 /// Deposits coins into the Drips vault
 /// Used by drivers when users send tokens to the protocol
 public(package) fun deposit<T>(registry: &mut DripsRegistry<T>, coins: Coin<T>) {
-    let vault_coin = dynamic_field::borrow_mut<vector<u8>, Coin<T>>(
-        &mut registry.id,
-        b"vault",
-    );
-    coin::join(vault_coin, coins);
+    coin::join(&mut registry.vault, coins);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
