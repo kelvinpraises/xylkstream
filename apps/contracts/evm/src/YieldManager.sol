@@ -7,6 +7,7 @@ import {SafeERC20} from "openzeppelin-contracts/token/ERC20/utils/SafeERC20.sol"
 /// @title YieldManager
 /// @notice Allows stream creators to earn yield on idle capital
 /// @dev Uses extension pattern: users deploy custom strategies, YieldManager owns positions
+/// @dev Single owner model - one YieldManager per enterprise/owner
 contract YieldManager {
     using SafeERC20 for IERC20;
 
@@ -18,22 +19,20 @@ contract YieldManager {
     error InsufficientLiquid();
     error ExceedsPrincipal();
     error NoYield();
-    error ExceedsStreamed();
     error PositionNotFound();
     error OnlyDrips();
-    error StrategyNotWhitelisted();
-    error OnlyOwner();
     error WithdrawalNotFound();
     error AlreadyConsumed();
     error AmountMismatch();
     error WithdrawalPending();
     error WrongStrategy();
+    error WrongToken();
 
     // ═══════════════════════════════════════════════════════════════════════════════
     //                              STORAGE & TYPES
     // ═══════════════════════════════════════════════════════════════════════════════
 
-    struct UserAccount {
+    struct Account {
         uint128 principal;        // Amount from Drips (must be returnable)
         uint128 liquidBalance;    // Tokens in vault
         uint128 investedBalance;  // Tokens in positions
@@ -43,60 +42,55 @@ contract YieldManager {
 
     struct Position {
         address strategy;
+        IERC20 token;            // Token used in this position
         uint128 amount;
-        bytes positionData;  // Strategy-specific position data
+        bytes positionData;      // Strategy-specific position data
     }
 
     /// @notice Withdrawal state for force collect
     struct WithdrawalState {
         uint256 accountId;
         address strategy;
+        IERC20 token;
         uint128 amount;
         address transferTo;
         bool consumed;
     }
 
     address public immutable dripsContract;
-    IERC20 public immutable token;
-    address public owner;
+    address public immutable owner;
 
-    /// account_id => UserAccount
-    mapping(uint256 => UserAccount) public accounts;
+    /// token => Account (per-token accounting)
+    mapping(IERC20 => Account) public accounts;
 
-    /// account_id => strategy => Position
-    mapping(uint256 => mapping(address => Position)) public positions;
+    /// token => strategy => Position
+    mapping(IERC20 => mapping(address => Position)) public positions;
 
-    /// Whitelisted strategies that users can invest in
-    mapping(address => bool) public whitelistedStrategies;
-
-    /// Pending force withdrawals (account_id => WithdrawalState)
+    /// Pending force withdrawals (accountId => WithdrawalState)
     mapping(uint256 => WithdrawalState) public pendingWithdrawals;
 
     // ═══════════════════════════════════════════════════════════════════════════════
     //                                  EVENTS
     // ═══════════════════════════════════════════════════════════════════════════════
 
-    event DepositedFromDrips(uint256 indexed accountId, uint256 amount);
-    event PositionOpened(uint256 indexed accountId, address indexed strategy, uint256 amount);
-    event PositionClosed(uint256 indexed accountId, address indexed strategy, uint256 amount, uint256 withdrawn);
+    event DepositedFromDrips(IERC20 indexed token, uint256 amount);
+    event PositionOpened(IERC20 indexed token, address indexed strategy, uint256 amount);
+    event PositionClosed(IERC20 indexed token, address indexed strategy, uint256 amount, uint256 withdrawn);
     event ForcedWithdrawForRecipient(
         uint256 indexed accountId,
-        uint256 indexed recipientAccountId,
+        IERC20 indexed token,
         address indexed strategy,
         uint256 amount
     );
-    event ReturnedPrincipalToDrips(uint256 indexed accountId, uint256 amount);
-    event YieldClaimed(uint256 indexed accountId, uint256 amount);
-    event StrategyWhitelisted(address indexed strategy, bool whitelisted);
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event ReturnedPrincipalToDrips(IERC20 indexed token, uint256 amount);
+    event YieldClaimed(IERC20 indexed token, uint256 amount);
 
     // ═══════════════════════════════════════════════════════════════════════════════
     //                              INITIALIZATION
     // ═══════════════════════════════════════════════════════════════════════════════
 
-    constructor(address _dripsContract, address _token) {
+    constructor(address _dripsContract) {
         dripsContract = _dripsContract;
-        token = IERC20(_token);
         owner = msg.sender;
     }
 
@@ -104,9 +98,8 @@ contract YieldManager {
     //                              MODIFIERS
     // ═══════════════════════════════════════════════════════════════════════════════
 
-    /// @dev Verifies that caller owns the account (for address driver: account_id = address as uint256)
-    modifier onlyAccountOwner(uint256 accountId) {
-        if (uint256(uint160(msg.sender)) != accountId) revert NotAuthorized();
+    modifier onlyOwner() {
+        if (msg.sender != owner) revert NotAuthorized();
         _;
     }
 
@@ -115,52 +108,24 @@ contract YieldManager {
         _;
     }
 
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert OnlyOwner();
-        _;
-    }
-
-    modifier onlyWhitelistedStrategy(address strategy) {
-        if (!whitelistedStrategies[strategy]) revert StrategyNotWhitelisted();
-        _;
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════════
-    //                    ADMIN FUNCTIONS (owner-only)
-    // ═══════════════════════════════════════════════════════════════════════════════
-
-    /// @notice Whitelist or blacklist a strategy
-    /// @dev Only owner can manage strategy whitelist
-    function setStrategyWhitelist(address strategy, bool whitelisted) external onlyOwner {
-        whitelistedStrategies[strategy] = whitelisted;
-        emit StrategyWhitelisted(strategy, whitelisted);
-    }
-
-    /// @notice Transfer ownership
-    function transferOwnership(address newOwner) external onlyOwner {
-        address oldOwner = owner;
-        owner = newOwner;
-        emit OwnershipTransferred(oldOwner, newOwner);
-    }
-
     // ═══════════════════════════════════════════════════════════════════════════════
     //                    DRIPS INTEGRATION (Drips-only)
     // ═══════════════════════════════════════════════════════════════════════════════
 
     /// @notice Deposit funds from Drips to YieldManager
-    /// @dev Called by Drips contract when user transfers idle balance
-    function dripsDeposit(uint256 accountId, uint256 amount) external onlyDrips {
-        UserAccount storage account = accounts[accountId];
+    /// @dev Called by Drips contract when owner transfers idle balance
+    function dripsDeposit(IERC20 token, uint256 amount) external onlyDrips {
+        Account storage account = accounts[token];
         account.principal += uint128(amount);
         account.liquidBalance += uint128(amount);
 
-        emit DepositedFromDrips(accountId, amount);
+        emit DepositedFromDrips(token, amount);
     }
 
     /// @notice Return principal to Drips
     /// @dev Called by Drips contract to reclaim principal
-    function dripsReturn(uint256 accountId, uint256 amount) external onlyDrips {
-        UserAccount storage account = accounts[accountId];
+    function dripsReturn(IERC20 token, uint256 amount) external onlyDrips {
+        Account storage account = accounts[token];
 
         // Can only return up to principal
         if (amount > account.principal) revert ExceedsPrincipal();
@@ -175,7 +140,7 @@ contract YieldManager {
         account.principal -= uint128(amount);
         account.liquidBalance -= uint128(amount);
 
-        emit ReturnedPrincipalToDrips(accountId, amount);
+        emit ReturnedPrincipalToDrips(token, amount);
     }
 
     /// @notice Force withdrawal for recipient (clawback mechanism)
@@ -184,6 +149,7 @@ contract YieldManager {
     /// @dev User must call strategy to withdraw and consume the withdrawal state
     function dripsForceWithdraw(
         uint256 accountId,
+        IERC20 token,
         address strategy,
         uint128 amount,
         address transferTo
@@ -195,6 +161,7 @@ contract YieldManager {
         pendingWithdrawals[accountId] = WithdrawalState({
             accountId: accountId,
             strategy: strategy,
+            token: token,
             amount: amount,
             transferTo: transferTo,
             consumed: false
@@ -207,6 +174,7 @@ contract YieldManager {
     function completeForceWithdrawal(
         uint256 accountId,
         address strategy,
+        IERC20 token,
         uint128 amount
     ) external returns (uint128 principalWithdrawn) {
         WithdrawalState storage state = pendingWithdrawals[accountId];
@@ -222,9 +190,12 @@ contract YieldManager {
         
         // Verify strategy matches
         if (state.strategy != strategy) revert WrongStrategy();
+        
+        // Verify token matches
+        if (state.token != token) revert WrongToken();
 
         // Get position
-        Position storage position = positions[accountId][strategy];
+        Position storage position = positions[token][strategy];
         if (position.strategy == address(0)) revert PositionNotFound();
 
         // Determine principal to deduct (min of amount or position.amount)
@@ -234,7 +205,7 @@ contract YieldManager {
         position.amount -= principalWithdrawn;
 
         // Update accounting
-        UserAccount storage account = accounts[accountId];
+        Account storage account = accounts[token];
         account.investedBalance -= principalWithdrawn;
 
         // Mark as consumed
@@ -246,34 +217,34 @@ contract YieldManager {
         // Clean up state
         delete pendingWithdrawals[accountId];
 
-        emit ForcedWithdrawForRecipient(accountId, accountId, strategy, principalWithdrawn);
+        emit ForcedWithdrawForRecipient(accountId, token, strategy, principalWithdrawn);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
-    //                    POSITION MANAGEMENT (user-initiated)
+    //                    POSITION MANAGEMENT (owner-initiated)
     // ═══════════════════════════════════════════════════════════════════════════════
 
-    /// @notice Open position - invest via user-deployed strategy
+    /// @notice Open position - invest via strategy
     /// @dev Strategy receives tokens and returns position data
-    /// @dev Strategy must be whitelisted by owner
     function positionOpen(
-        uint256 accountId,
+        IERC20 token,
         address strategy,
         uint256 amount,
         bytes calldata strategyData
-    ) external onlyAccountOwner(accountId) onlyWhitelistedStrategy(strategy) {
-        UserAccount storage account = accounts[accountId];
+    ) external onlyOwner {
+        Account storage account = accounts[token];
         if (amount > account.liquidBalance) revert InsufficientLiquid();
 
         // Transfer tokens to strategy
         token.safeTransfer(strategy, amount);
 
         // Call strategy to execute investment
-        bytes memory positionData = IYieldStrategy(strategy).executeInvestment(amount, strategyData);
+        bytes memory positionData = IYieldStrategy(strategy).invest(amount, strategyData);
 
         // Store position
-        positions[accountId][strategy] = Position({
+        positions[token][strategy] = Position({
             strategy: strategy,
+            token: token,
             amount: uint128(amount),
             positionData: positionData
         });
@@ -282,49 +253,49 @@ contract YieldManager {
         account.liquidBalance -= uint128(amount);
         account.investedBalance += uint128(amount);
 
-        emit PositionOpened(accountId, strategy, amount);
+        emit PositionOpened(token, strategy, amount);
     }
 
     /// @notice Close position - withdraw from strategy
-    /// @dev Strategy returns tokens, YieldManager calculates principal vs yield
+    /// @dev Strategy returns tokens including fees, YieldManager calculates principal vs yield
     function positionClose(
-        uint256 accountId,
+        IERC20 token,
         address strategy,
         bytes calldata strategyData
-    ) external onlyAccountOwner(accountId) {
-        Position storage position = positions[accountId][strategy];
+    ) external onlyOwner {
+        Position storage position = positions[token][strategy];
         if (position.strategy == address(0)) revert PositionNotFound();
 
-        // Call strategy to withdraw entire position
-        uint256 withdrawn = IYieldStrategy(strategy).executeWithdrawal(
+        // Call strategy to withdraw entire position (includes collecting fees)
+        uint256 withdrawn = IYieldStrategy(strategy).withdraw(
             position.positionData,
             position.amount,
             strategyData
         );
 
         // Determine principal to deduct (min of withdrawn or position.amount)
-        // If withdrawn > position.amount, the extra is yield
+        // If withdrawn > position.amount, the extra is yield (including fees)
         uint128 principalWithdrawn = uint128(_min(withdrawn, position.amount));
 
         // Update position
         position.amount -= principalWithdrawn;
 
         // Update accounting: invested -> liquid (may increase if yield earned)
-        UserAccount storage account = accounts[accountId];
+        Account storage account = accounts[token];
         account.investedBalance -= principalWithdrawn;
         account.liquidBalance += uint128(withdrawn);
 
-        emit PositionClosed(accountId, strategy, principalWithdrawn, withdrawn);
+        emit PositionClosed(token, strategy, principalWithdrawn, withdrawn);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
-    //                    YIELD MANAGEMENT (user-initiated)
+    //                    YIELD MANAGEMENT (owner-initiated)
     // ═══════════════════════════════════════════════════════════════════════════════
 
     /// @notice Claim yield earned on positions
     /// @dev Can only claim yield that is in liquid balance
-    function yieldClaim(uint256 accountId, address recipient) external onlyAccountOwner(accountId) {
-        UserAccount storage account = accounts[accountId];
+    function yieldClaim(IERC20 token, address recipient) external onlyOwner {
+        Account storage account = accounts[token];
 
         // Calculate yield
         uint256 total = uint256(account.liquidBalance) + uint256(account.investedBalance);
@@ -340,36 +311,36 @@ contract YieldManager {
         // Reduce liquid balance only
         account.liquidBalance -= uint128(yieldAmount);
 
-        emit YieldClaimed(accountId, yieldAmount);
+        emit YieldClaimed(token, yieldAmount);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
     //                           VIEW FUNCTIONS
     // ═══════════════════════════════════════════════════════════════════════════════
 
-    /// @notice Get user account balances
-    function getBalances(uint256 accountId)
+    /// @notice Get account balances for a token
+    function getBalances(IERC20 token)
         external
         view
         returns (uint128 principal, uint128 liquidBalance, uint128 investedBalance)
     {
-        UserAccount storage account = accounts[accountId];
+        Account storage account = accounts[token];
         return (account.principal, account.liquidBalance, account.investedBalance);
     }
 
     /// @notice Get position details
-    function getPosition(uint256 accountId, address strategy)
+    function getPosition(IERC20 token, address strategy)
         external
         view
         returns (address strategyAddr, uint128 amount, bytes memory positionData)
     {
-        Position storage position = positions[accountId][strategy];
+        Position storage position = positions[token][strategy];
         return (position.strategy, position.amount, position.positionData);
     }
 
-    /// @notice Calculate yield for an account
-    function calculateYield(uint256 accountId) external view returns (uint256) {
-        UserAccount storage account = accounts[accountId];
+    /// @notice Calculate yield for a token
+    function calculateYield(IERC20 token) external view returns (uint256) {
+        Account storage account = accounts[token];
         uint256 total = uint256(account.liquidBalance) + uint256(account.investedBalance);
         if (total < account.principal) return 0;
         return total - account.principal;
@@ -398,20 +369,21 @@ contract YieldManager {
 /// @title IYieldStrategy
 /// @notice Interface that all yield strategies must implement
 interface IYieldStrategy {
-    /// @notice Execute investment - returns position data
+    /// @notice Invest - returns position data
     /// @param amount Amount to invest
     /// @param strategyData Strategy-specific data
     /// @return positionData Data representing the position
-    function executeInvestment(uint256 amount, bytes calldata strategyData)
+    function invest(uint256 amount, bytes calldata strategyData)
         external
         returns (bytes memory positionData);
 
-    /// @notice Execute withdrawal - returns amount withdrawn
+    /// @notice Withdraw - returns amount withdrawn (including fees/yield)
+    /// @dev Strategy should collect all fees before withdrawing
     /// @param positionData Data representing the position
     /// @param amount Amount to withdraw
     /// @param strategyData Strategy-specific data
-    /// @return withdrawn Actual amount withdrawn (may include yield)
-    function executeWithdrawal(bytes calldata positionData, uint256 amount, bytes calldata strategyData)
+    /// @return withdrawn Actual amount withdrawn (principal + fees/yield)
+    function withdraw(bytes calldata positionData, uint256 amount, bytes calldata strategyData)
         external
         returns (uint256 withdrawn);
 }
