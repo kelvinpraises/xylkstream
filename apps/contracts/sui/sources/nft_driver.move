@@ -16,6 +16,7 @@ use xylkstream::driver_transfer_utils;
 use xylkstream::driver_utils::{Self, AccountMetadata};
 use xylkstream::splits::{SplitsReceiver, SplitsRegistry};
 use xylkstream::streams::{Self, StreamReceiver, StreamsRegistry};
+use xylkstream::yield_manager::{YieldManager, WithdrawalReceipt};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                                 CONSTANTS
@@ -274,6 +275,41 @@ public fun collect<T>(
     );
 }
 
+/// Force collect - for when funds are in YieldManager instead of Drips vault
+/// Checks if Drips vault has enough coins first, aborts if it does
+/// Returns hot potato that caller must consume by calling strategy
+/// Ownership is proven by having the NFT reference.
+///
+/// `nft`: The NFT representing the account (proves ownership)
+/// `drips_registry`: The drips registry
+/// `splits_registry`: The splits registry
+/// `yield_manager`: The yield manager holding invested funds
+/// `strategy_id`: The strategy ID where funds are invested
+/// `transfer_to`: The address to send collected funds to
+/// `ctx`: Transaction context
+///
+/// Returns: WithdrawalReceipt hot potato (must be consumed by calling strategy)
+public fun force_collect<T>(
+    nft: &DripsIdentityNFT,
+    drips_registry: &mut DripsRegistry<T>,
+    splits_registry: &mut SplitsRegistry<T>,
+    yield_manager: &mut YieldManager<T>,
+    strategy_id: sui::object::ID,
+    transfer_to: address,
+    ctx: &mut TxContext,
+): WithdrawalReceipt {
+    let token_id = nft.token_id;
+    driver_transfer_utils::force_collect_and_transfer(
+        drips_registry,
+        splits_registry,
+        yield_manager,
+        token_id,
+        strategy_id,
+        transfer_to,
+        ctx,
+    )
+}
+
 /// Gives funds from the account to the receiver.
 /// The receiver can split and collect them immediately.
 /// Ownership is proven by having the NFT reference.
@@ -444,4 +480,60 @@ public fun token_object_id(registry: &NFTDriverRegistry, token_id: u256): Option
 /// Returns the token ID from an NFT.
 public fun get_token_id(nft: &DripsIdentityNFT): u256 {
     nft.token_id
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                    YIELD MANAGER OPERATIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Transfer idle funds from Drips to YieldManager
+/// Allows NFT holder to invest idle balance in yield strategies
+/// Ownership is proven by having the NFT reference.
+///
+/// `nft`: The NFT representing the account (proves ownership)
+/// `drips_registry`: The drips registry
+/// `yield_manager`: The yield manager to deposit into
+/// `amount`: Amount to transfer
+/// `ctx`: Transaction context
+public fun transfer_to_yield_manager<T>(
+    nft: &DripsIdentityNFT,
+    drips_registry: &mut DripsRegistry<T>,
+    yield_manager: &mut YieldManager<T>,
+    amount: u128,
+    ctx: &mut TxContext,
+) {
+    let token_id = nft.token_id;
+    drips::transfer_to_yield_manager(
+        drips_registry,
+        yield_manager,
+        token_id,
+        amount,
+        ctx,
+    );
+}
+
+/// Return principal from YieldManager back to Drips
+/// Allows NFT holder to reclaim principal from YieldManager
+/// Ownership is proven by having the NFT reference.
+///
+/// `nft`: The NFT representing the account (proves ownership)
+/// `drips_registry`: The drips registry
+/// `yield_manager`: The yield manager to return from
+/// `amount`: Amount to return
+/// `ctx`: Transaction context
+public fun return_from_yield_manager<T>(
+    nft: &DripsIdentityNFT,
+    drips_registry: &mut DripsRegistry<T>,
+    yield_manager: &mut YieldManager<T>,
+    amount: u128,
+    ctx: &mut TxContext,
+) {
+    let token_id = nft.token_id;
+    drips::return_from_yield_manager(
+        drips_registry,
+        yield_manager,
+        token_id,
+        amount,
+        ctx,
+    );
 }

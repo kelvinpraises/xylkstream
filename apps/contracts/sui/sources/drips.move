@@ -30,6 +30,10 @@ const E_TOTAL_BALANCE_TOO_HIGH: u64 = 1;
 const E_TOKEN_BALANCE_TOO_LOW: u64 = 2;
 /// Withdrawal amount exceeds available withdrawable balance
 const E_WITHDRAWAL_AMOUNT_TOO_HIGH: u64 = 3;
+/// Drips vault has sufficient funds, use normal collect instead
+const E_USE_NORMAL_COLLECT: u64 = 4;
+/// Insufficient vault balance, use force_collect to withdraw from YieldManager
+const E_INSUFFICIENT_VAULT_BALANCE: u64 = 5;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              STORAGE & TYPES
@@ -515,12 +519,116 @@ public(package) fun collect<T>(
     account_id: u256,
     ctx: &mut TxContext,
 ): u128 {
+    // Check collectable amount first
+    let collectable_amt = splits::collectable(splits_registry, account_id);
+    
+    // Check if Drips vault has enough coins to fulfill the collection
+    if (collectable_amt > 0) {
+        let (streams_balance, splits_balance) = balances(drips_registry, account_id);
+        let held_balance = token_balance(drips_registry);
+        let managed_balance = streams_balance + splits_balance;
+        assert!(held_balance >= managed_balance, E_TOKEN_BALANCE_TOO_LOW);
+        let withdrawable = held_balance - managed_balance;
+        
+        // If vault doesn't have enough, abort with helpful error
+        assert!(
+            collectable_amt <= withdrawable,
+            E_INSUFFICIENT_VAULT_BALANCE
+        );
+    };
+    
     let amt = splits::collect(splits_registry, account_id, ctx);
     if (amt != 0) {
         decrease_splits_balance(drips_registry, account_id, amt);
         event::emit(Collected { account_id, amount: amt });
     };
     amt
+}
+
+/// Force collect - for when funds are in YieldManager instead of Drips vault
+/// Checks if Drips vault has enough coins first, aborts if it does
+/// Returns hot potato that must be consumed by calling strategy
+public(package) fun force_collect<T>(
+    drips_registry: &mut DripsRegistry<T>,
+    splits_registry: &mut splits::SplitsRegistry<T>,
+    yield_manager: &mut xylkstream::yield_manager::YieldManager<T>,
+    account_id: u256,
+    strategy_id: sui::object::ID,
+    transfer_to: address,
+    ctx: &mut TxContext,
+): xylkstream::yield_manager::WithdrawalReceipt {
+    // 1. Check collectable amount
+    let collectable_amt = splits::collectable(splits_registry, account_id);
+
+    // 2. Check if Drips vault has enough coins
+    let (streams_balance, splits_balance) = balances(drips_registry, account_id);
+    let held_balance = token_balance(drips_registry);
+    let managed_balance = streams_balance + splits_balance;
+    let withdrawable = held_balance - managed_balance;
+
+    // 3. If Drips has enough, user should use normal collect
+    assert!(collectable_amt > withdrawable, E_USE_NORMAL_COLLECT);
+
+    // 4. Do accounting (collect)
+    let amt = collect(drips_registry, splits_registry, account_id, ctx);
+
+    // 5. Create withdrawal state and hot potato in YieldManager
+    xylkstream::yield_manager::drips_force_withdraw(
+        yield_manager,
+        account_id,
+        strategy_id,
+        amt,
+        transfer_to,
+    )
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                    YIELD MANAGER INTEGRATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Transfer idle funds from Drips to YieldManager
+/// Allows account owner to invest idle balance in yield strategies
+/// Withdrawable funds are transferred to YieldManager as principal
+public(package) fun transfer_to_yield_manager<T>(
+    drips_registry: &mut DripsRegistry<T>,
+    yield_manager: &mut xylkstream::yield_manager::YieldManager<T>,
+    account_id: u256,
+    amount: u128,
+    ctx: &mut TxContext,
+) {
+    // Verify withdrawable balance
+    let (streams_balance, splits_balance) = balances(drips_registry, account_id);
+    let held_balance = token_balance(drips_registry);
+    let managed_balance = streams_balance + splits_balance;
+    let withdrawable = held_balance - managed_balance;
+    assert!(amount <= withdrawable, E_WITHDRAWAL_AMOUNT_TOO_HIGH);
+
+    // Split coins from vault
+    let coins = coin::split(&mut drips_registry.vault, (amount as u64), ctx);
+
+    // Deposit to YieldManager
+    xylkstream::yield_manager::drips_deposit(yield_manager, coins);
+}
+
+/// Return principal from YieldManager back to Drips
+/// Allows account owner to reclaim principal from YieldManager
+/// Coins are returned to Drips vault and become withdrawable
+public(package) fun return_from_yield_manager<T>(
+    drips_registry: &mut DripsRegistry<T>,
+    yield_manager: &mut xylkstream::yield_manager::YieldManager<T>,
+    account_id: u256,
+    amount: u128,
+    ctx: &mut TxContext,
+) {
+    // Get coins from YieldManager
+    let coins = xylkstream::yield_manager::drips_return(
+        yield_manager,
+        amount,
+        ctx,
+    );
+
+    // Deposit back to Drips vault
+    coin::join(&mut drips_registry.vault, coins);
 }
 
 /// Gives funds from the account to the receiver.

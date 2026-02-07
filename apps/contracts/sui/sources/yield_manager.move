@@ -5,6 +5,7 @@ module xylkstream::yield_manager;
 use sui::coin::{Self, Coin};
 use sui::dynamic_field;
 use sui::event;
+use sui::table::{Self, Table};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                                   ERRORS
@@ -13,8 +14,12 @@ use sui::event;
 const E_INSUFFICIENT_LIQUID: u64 = 1;
 const E_EXCEEDS_PRINCIPAL: u64 = 2;
 const E_NO_YIELD: u64 = 3;
-const E_EXCEEDS_STREAMED: u64 = 4;
-const E_POSITION_NOT_FOUND: u64 = 5;
+const E_POSITION_NOT_FOUND: u64 = 4;
+const E_WITHDRAWAL_NOT_FOUND: u64 = 5;
+const E_ALREADY_CONSUMED: u64 = 6;
+const E_AMOUNT_MISMATCH: u64 = 7;
+const E_WITHDRAWAL_PENDING: u64 = 8;
+const E_WRONG_STRATEGY: u64 = 9;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              STORAGE & TYPES
@@ -31,10 +36,28 @@ public struct YieldManager<phantom T> has key {
     liquid_balance: u128,
     /// Coins currently in positions (across all strategies)
     invested_balance: u128,
+    /// Pending force withdrawals (account_id -> WithdrawalState)
+    pending_withdrawals: Table<u256, WithdrawalState>,
     // Total = liquid_balance + invested_balance
     // Yield = Total - principal
     // Positions stored as dynamic fields: PositionKey -> Position<StrategyType>
     // Inner positions stored as dynamic fields: InnerPositionKey -> InnerPosition
+}
+
+/// Withdrawal state for force collect
+public struct WithdrawalState has store {
+    account_id: u256,
+    strategy_id: ID,
+    amount: u128,
+    transfer_to: address,
+    consumed: bool,
+}
+
+/// Hot potato - must be consumed by calling complete_force_withdrawal
+public struct WithdrawalReceipt {
+    account_id: u256,
+    strategy_id: ID,
+    amount: u128,
 }
 
 /// Key for position storage
@@ -115,6 +138,7 @@ public fun create_yield_manager<T>(ctx: &mut TxContext) {
         principal: 0,
         liquid_balance: 0,
         invested_balance: 0,
+        pending_withdrawals: table::new(ctx),
     };
 
     event::emit(YieldManagerCreated<T> { manager_id });
@@ -190,46 +214,105 @@ public(package) fun drips_return<T>(
     coins
 }
 
-/// Force withdrawal for recipient (clawback mechanism)
-/// Called by Drips contract when recipient claims streamed funds from invested position
-/// MUST be called by Drips which verifies streamed_amount
-public(package) fun drips_force_withdraw<T, StrategyType>(
+// ═══════════════════════════════════════════════════════════════════════════════
+//                    FORCE WITHDRAW (Hot Potato Flow)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Force withdrawal for recipient (clawback mechanism with hot potato)
+/// Called by Drips after collect() accounting when recipient claims streamed funds
+/// Creates withdrawal state and returns hot potato that MUST be consumed
+/// User must call strategy to withdraw and consume the hot potato
+public(package) fun drips_force_withdraw<T>(
     manager: &mut YieldManager<T>,
+    account_id: u256,
     strategy_id: ID,
-    recipient_account_id: u256,
-    streamed_amount: u128,
+    amount: u128,
+    transfer_to: address,
+): WithdrawalReceipt {
+    // Store withdrawal state
+    let state = WithdrawalState {
+        account_id,
+        strategy_id,
+        amount,
+        transfer_to,
+        consumed: false,
+    };
+
+    // If already exists, abort (shouldn't happen in atomic tx)
+    assert!(
+        !table::contains(&manager.pending_withdrawals, account_id),
+        E_WITHDRAWAL_PENDING,
+    );
+    table::add(&mut manager.pending_withdrawals, account_id, state);
+
+    // Return hot potato
+    WithdrawalReceipt {
+        account_id,
+        strategy_id,
+        amount,
+    }
+}
+
+/// Complete withdrawal - consumes hot potato
+/// Called by strategy after withdrawing from position
+/// Verifies coins, updates accounting, transfers to recipient
+public fun complete_force_withdrawal<T, StrategyType>(
+    manager: &mut YieldManager<T>,
+    receipt: WithdrawalReceipt,
     coins: Coin<T>,
-    ctx: &mut TxContext,
+    _ctx: &mut TxContext,
 ) {
+    let WithdrawalReceipt { account_id, strategy_id, amount } = receipt;
+
+    // 1. Get withdrawal state
+    assert!(
+        table::contains(&manager.pending_withdrawals, account_id),
+        E_WITHDRAWAL_NOT_FOUND,
+    );
+    let state = table::borrow_mut(&mut manager.pending_withdrawals, account_id);
+
+    // 2. Verify not already consumed
+    assert!(!state.consumed, E_ALREADY_CONSUMED);
+
+    // 3. Verify coins match amount
+    let withdrawn = coin::value(&coins);
+    assert!((withdrawn as u128) == amount, E_AMOUNT_MISMATCH);
+
+    // 4. Verify strategy matches
+    assert!(state.strategy_id == strategy_id, E_WRONG_STRATEGY);
+
+    // 5. Update position
     let key = position_key(strategy_id);
     assert!(dynamic_field::exists_(&manager.id, key), E_POSITION_NOT_FOUND);
-
-    // Get actual withdrawn amount from coins
-    let withdrawn = coin::value(&coins);
-
-    // Verify amount doesn't exceed what has streamed
-    assert!((withdrawn as u128) <= streamed_amount, E_EXCEEDS_STREAMED);
-
-    // Access position
     let position = dynamic_field::borrow_mut<PositionKey, Position<StrategyType>>(
         &mut manager.id,
         key,
     );
-
-    // Determine principal to deduct
-    let principal_withdrawn = min_u128((withdrawn as u128), position.amount);
-
-    // Update position
+    let principal_withdrawn = min_u128(amount, position.amount);
     position.amount = position.amount - principal_withdrawn;
 
-    // Update accounting
+    // 6. Update accounting
     manager.invested_balance = manager.invested_balance - principal_withdrawn;
 
-    // Transfer coins to recipient
-    transfer::public_transfer(coins, tx_context::sender(ctx));
+    // 7. Mark as consumed
+    state.consumed = true;
 
+    // 8. Transfer coins to recipient
+    let transfer_to = state.transfer_to;
+    transfer::public_transfer(coins, transfer_to);
+
+    // 9. Clean up state
+    let WithdrawalState {
+        account_id: _,
+        strategy_id: _,
+        amount: _,
+        transfer_to: _,
+        consumed: _,
+    } = table::remove(&mut manager.pending_withdrawals, account_id);
+
+    // 10. Emit event
     event::emit(ForcedWithdrawForRecipient {
-        recipient_account_id,
+        recipient_account_id: account_id,
         strategy_id,
         amount: principal_withdrawn,
     });
@@ -395,4 +478,42 @@ public fun borrow_inner_position<T, StrategyType, InnerPosition: store>(
 ): &InnerPosition {
     let key = inner_position_key(strategy_id);
     dynamic_field::borrow<InnerPositionKey, InnerPosition>(&manager.id, key)
+}
+
+/// Get withdrawal state (for strategy to read)
+public fun get_withdrawal_state<T>(
+    manager: &YieldManager<T>,
+    account_id: u256,
+): &WithdrawalState {
+    assert!(
+        table::contains(&manager.pending_withdrawals, account_id),
+        E_WITHDRAWAL_NOT_FOUND,
+    );
+    table::borrow(&manager.pending_withdrawals, account_id)
+}
+
+/// Accessor functions for WithdrawalReceipt
+public fun withdrawal_receipt_account_id(receipt: &WithdrawalReceipt): u256 {
+    receipt.account_id
+}
+
+public fun withdrawal_receipt_strategy_id(receipt: &WithdrawalReceipt): ID {
+    receipt.strategy_id
+}
+
+public fun withdrawal_receipt_amount(receipt: &WithdrawalReceipt): u128 {
+    receipt.amount
+}
+
+/// Accessor functions for WithdrawalState
+public fun withdrawal_state_strategy_id(state: &WithdrawalState): ID {
+    state.strategy_id
+}
+
+public fun withdrawal_state_amount(state: &WithdrawalState): u128 {
+    state.amount
+}
+
+public fun withdrawal_state_transfer_to(state: &WithdrawalState): address {
+    state.transfer_to
 }

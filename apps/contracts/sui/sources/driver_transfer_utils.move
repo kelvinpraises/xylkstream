@@ -10,6 +10,7 @@ use sui::coin::{Self, Coin};
 use xylkstream::drips::{Self, DripsRegistry};
 use xylkstream::splits::SplitsRegistry;
 use xylkstream::streams::{StreamReceiver, StreamsRegistry};
+use xylkstream::yield_manager::{YieldManager, WithdrawalReceipt};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              TRANSFER FUNCTIONS
@@ -37,6 +38,39 @@ public fun collect_and_transfer<T>(
         drips::withdraw(drips_registry, account_id, transfer_to, amt, ctx);
     };
     amt
+}
+
+/// Force collect - for when funds are in YieldManager instead of Drips vault
+/// Checks if Drips vault has enough coins first, aborts if it does
+/// Returns hot potato that user must consume by calling strategy
+///
+/// `drips_registry`: The drips registry
+/// `splits_registry`: The splits registry
+/// `yield_manager`: The yield manager holding invested funds
+/// `account_id`: The account ID to collect for
+/// `strategy_id`: The strategy ID where funds are invested
+/// `transfer_to`: The address to send collected funds to
+/// `ctx`: Transaction context
+///
+/// Returns: WithdrawalReceipt hot potato (must be consumed)
+public fun force_collect_and_transfer<T>(
+    drips_registry: &mut DripsRegistry<T>,
+    splits_registry: &mut SplitsRegistry<T>,
+    yield_manager: &mut YieldManager<T>,
+    account_id: u256,
+    strategy_id: sui::object::ID,
+    transfer_to: address,
+    ctx: &mut TxContext,
+): WithdrawalReceipt {
+    drips::force_collect(
+        drips_registry,
+        splits_registry,
+        yield_manager,
+        account_id,
+        strategy_id,
+        transfer_to,
+        ctx,
+    )
 }
 
 /// Gives funds from the caller to the receiver.

@@ -11,6 +11,7 @@ use xylkstream::driver_transfer_utils;
 use xylkstream::driver_utils;
 use xylkstream::splits::{SplitsReceiver, SplitsRegistry};
 use xylkstream::streams::{Self, StreamReceiver, StreamsRegistry};
+use xylkstream::yield_manager::{YieldManager, WithdrawalReceipt};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              ACCOUNT ID
@@ -68,6 +69,37 @@ public fun collect<T>(
         transfer_to,
         ctx,
     );
+}
+
+/// Force collect - for when funds are in YieldManager instead of Drips vault
+/// Checks if Drips vault has enough coins first, aborts if it does
+/// Returns hot potato that caller must consume by calling strategy
+///
+/// `drips_registry`: The drips registry
+/// `splits_registry`: The splits registry
+/// `yield_manager`: The yield manager holding invested funds
+/// `strategy_id`: The strategy ID where funds are invested
+/// `transfer_to`: The address to send collected funds to
+/// `ctx`: Transaction context
+///
+/// Returns: WithdrawalReceipt hot potato (must be consumed by calling strategy)
+public fun force_collect<T>(
+    drips_registry: &mut DripsRegistry<T>,
+    splits_registry: &mut SplitsRegistry<T>,
+    yield_manager: &mut YieldManager<T>,
+    strategy_id: sui::object::ID,
+    transfer_to: address,
+    ctx: &mut sui::tx_context::TxContext,
+): WithdrawalReceipt {
+    driver_transfer_utils::force_collect_and_transfer(
+        drips_registry,
+        splits_registry,
+        yield_manager,
+        caller_account_id(ctx),
+        strategy_id,
+        transfer_to,
+        ctx,
+    )
 }
 
 /// Gives funds from the caller to the receiver.
@@ -185,4 +217,52 @@ public fun emit_account_metadata(
     ctx: &sui::tx_context::TxContext,
 ) {
     drips::emit_account_metadata(caller_account_id(ctx), account_metadata);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//                    YIELD MANAGER OPERATIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Transfer idle funds from Drips to YieldManager
+/// Allows caller to invest idle balance in yield strategies
+///
+/// `drips_registry`: The drips registry
+/// `yield_manager`: The yield manager to deposit into
+/// `amount`: Amount to transfer
+/// `ctx`: Transaction context
+public fun transfer_to_yield_manager<T>(
+    drips_registry: &mut DripsRegistry<T>,
+    yield_manager: &mut YieldManager<T>,
+    amount: u128,
+    ctx: &mut sui::tx_context::TxContext,
+) {
+    drips::transfer_to_yield_manager(
+        drips_registry,
+        yield_manager,
+        caller_account_id(ctx),
+        amount,
+        ctx,
+    );
+}
+
+/// Return principal from YieldManager back to Drips
+/// Allows caller to reclaim principal from YieldManager
+///
+/// `drips_registry`: The drips registry
+/// `yield_manager`: The yield manager to return from
+/// `amount`: Amount to return
+/// `ctx`: Transaction context
+public fun return_from_yield_manager<T>(
+    drips_registry: &mut DripsRegistry<T>,
+    yield_manager: &mut YieldManager<T>,
+    amount: u128,
+    ctx: &mut sui::tx_context::TxContext,
+) {
+    drips::return_from_yield_manager(
+        drips_registry,
+        yield_manager,
+        caller_account_id(ctx),
+        amount,
+        ctx,
+    );
 }
