@@ -174,6 +174,36 @@ export interface PluginIsolatedStorageTable {
   updated_at: UpdateableTimestamp;
 }
 
+// Account wallets - Multi-chain wallet support with CAIP standards
+export interface AccountWalletsTable {
+  id: Generated<number>;
+  account_id: number; // FK to vesting_accounts
+  chain_id: string; // CAIP-2 format (e.g., "eip155:8453", "sui:mainnet")
+  address: string; // CAIP-10 format (e.g., "eip155:8453:0x742d...")
+  privy_wallet_id: string;
+  created_at: Timestamp;
+  updated_at: UpdateableTimestamp;
+}
+
+// Transaction queue - Track all blockchain transactions
+export type TransactionStatus = "queued" | "pending" | "confirmed" | "failed";
+export type TransactionType = "transfer" | "swap" | "bridge" | "contract_call";
+
+export interface TransactionQueueTable {
+  id: Generated<number>;
+  account_id: number; // FK to vesting_accounts
+  chain_id: string; // CAIP-2 format
+  asset_id: string | null; // CAIP-19 format (nullable for native transfers)
+  transaction_type: TransactionType;
+  status: TransactionStatus;
+  tx_hash: string | null;
+  nonce: number | null;
+  raw_transaction: string | null; // JSON
+  error: string | null;
+  created_at: Timestamp;
+  confirmed_at: Date | null;
+}
+
 // Database interface
 export interface DB {
   users: UsersTable;
@@ -183,6 +213,8 @@ export interface DB {
   plugin_registry: PluginRegistryTable;
   notifications: NotificationsTable;
   plugin_isolated_storage: PluginIsolatedStorageTable;
+  account_wallets: AccountWalletsTable;
+  transaction_queue: TransactionQueueTable;
 }
 
 // Selectable types for queries
@@ -192,3 +224,5 @@ export type VestingStream = Selectable<VestingStreamsTable>;
 export type AuditLog = Selectable<AuditLogsTable>;
 export type PluginRegistry = Selectable<PluginRegistryTable>;
 export type Notification = Selectable<NotificationsTable>;
+export type AccountWallet = Selectable<AccountWalletsTable>;
+export type TransactionQueue = Selectable<TransactionQueueTable>;

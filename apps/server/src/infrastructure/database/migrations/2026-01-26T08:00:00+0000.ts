@@ -157,6 +157,56 @@ export async function up(db: Kysely<DB>): Promise<void> {
     )
     .execute();
 
+  // Account wallets table - Multi-chain wallet support with CAIP standards
+  await db.schema
+    .createTable("account_wallets")
+    .addColumn("id", "integer", (col) => col.primaryKey().autoIncrement())
+    .addColumn("account_id", "integer", (col) => col.notNull())
+    .addColumn("chain_id", "text", (col) => col.notNull()) // CAIP-2 format
+    .addColumn("address", "text", (col) => col.notNull()) // CAIP-10 format
+    .addColumn("privy_wallet_id", "text", (col) => col.notNull())
+    .addColumn("created_at", "text", (col) =>
+      col.notNull().defaultTo(sql`CURRENT_TIMESTAMP`)
+    )
+    .addColumn("updated_at", "text", (col) =>
+      col.notNull().defaultTo(sql`CURRENT_TIMESTAMP`)
+    )
+    .addForeignKeyConstraint(
+      "fk_account_wallets_account",
+      ["account_id"],
+      "vesting_accounts",
+      ["id"],
+      (cb) => cb.onDelete("cascade")
+    )
+    .addUniqueConstraint("uq_account_chain", ["account_id", "chain_id"])
+    .execute();
+
+  // Transaction queue table - Track swap/bridge transactions
+  await db.schema
+    .createTable("transaction_queue")
+    .addColumn("id", "integer", (col) => col.primaryKey().autoIncrement())
+    .addColumn("account_id", "integer", (col) => col.notNull())
+    .addColumn("chain_id", "text", (col) => col.notNull()) // CAIP-2
+    .addColumn("asset_id", "text") // CAIP-19 (nullable for native transfers)
+    .addColumn("transaction_type", "text", (col) => col.notNull()) // 'transfer' | 'swap' | 'bridge' | 'contract_call'
+    .addColumn("status", "text", (col) => col.notNull()) // 'queued' | 'pending' | 'confirmed' | 'failed'
+    .addColumn("tx_hash", "text")
+    .addColumn("nonce", "integer")
+    .addColumn("raw_transaction", "text") // JSON
+    .addColumn("error", "text")
+    .addColumn("created_at", "text", (col) =>
+      col.notNull().defaultTo(sql`CURRENT_TIMESTAMP`)
+    )
+    .addColumn("confirmed_at", "text")
+    .addForeignKeyConstraint(
+      "fk_transaction_queue_account",
+      ["account_id"],
+      "vesting_accounts",
+      ["id"],
+      (cb) => cb.onDelete("cascade")
+    )
+    .execute();
+
   // Create indexes for common queries
   await db.schema
     .createIndex("vesting_streams_account_status_idx")
@@ -175,10 +225,42 @@ export async function up(db: Kysely<DB>): Promise<void> {
     .on("notifications")
     .columns(["account_id", "is_read"])
     .execute();
+
+  await db.schema
+    .createIndex("idx_account_wallets_account")
+    .on("account_wallets")
+    .column("account_id")
+    .execute();
+
+  await db.schema
+    .createIndex("idx_account_wallets_chain")
+    .on("account_wallets")
+    .column("chain_id")
+    .execute();
+
+  await db.schema
+    .createIndex("idx_transaction_queue_account")
+    .on("transaction_queue")
+    .column("account_id")
+    .execute();
+
+  await db.schema
+    .createIndex("idx_transaction_queue_status")
+    .on("transaction_queue")
+    .column("status")
+    .execute();
+
+  await db.schema
+    .createIndex("idx_transaction_queue_chain")
+    .on("transaction_queue")
+    .column("chain_id")
+    .execute();
 }
 
 export async function down(db: Kysely<any>): Promise<void> {
   // Drop in reverse order to respect foreign keys
+  await db.schema.dropTable("transaction_queue").ifExists().execute();
+  await db.schema.dropTable("account_wallets").ifExists().execute();
   await db.schema.dropTable("plugin_isolated_storage").ifExists().execute();
   await db.schema.dropTable("notifications").ifExists().execute();
   await db.schema.dropTable("audit_logs").ifExists().execute();
