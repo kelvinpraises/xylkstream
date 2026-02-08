@@ -1,20 +1,20 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
-type Theme = "dark" | "light" | "system";
+export type Theme = "lavender" | "aurora" | "system";
 
-interface ThemeProviderProps {
+export interface ThemeProviderProps {
   children: ReactNode;
   defaultTheme?: Theme;
   storageKey?: string;
 }
 
-interface ThemeProviderState {
+export interface ThemeProviderState {
   theme: Theme;
   setTheme: (theme: Theme) => void;
 }
 
 const initialState: ThemeProviderState = {
-  theme: "system",
+  theme: "lavender",
   setTheme: () => null,
 };
 
@@ -22,29 +22,36 @@ const ThemeProviderContext = createContext<ThemeProviderState>(initialState);
 
 export function ThemeProvider({
   children,
-  defaultTheme = "dark",
+  defaultTheme = "lavender",
   storageKey = "xylkstream-theme",
   ...props
 }: ThemeProviderProps) {
   const [theme, setTheme] = useState<Theme>(
-    () => (localStorage.getItem(storageKey) as Theme) || defaultTheme
+    () => (localStorage.getItem(storageKey) as Theme) || defaultTheme,
   );
 
   useEffect(() => {
     const root = window.document.documentElement;
 
+    // Remove legacy classes if any
     root.classList.remove("light", "dark");
+
+    // Remove existing data-theme
+    root.removeAttribute("data-theme");
 
     if (theme === "system") {
       const systemTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
-        ? "dark"
-        : "light";
+        ? "aurora"
+        : "lavender";
 
-      root.classList.add(systemTheme);
+      root.setAttribute("data-theme", systemTheme);
+      // For legacy tailwind dark mode support if needed
+      if (systemTheme === "aurora") root.classList.add("dark");
       return;
     }
 
-    root.classList.add(theme);
+    root.setAttribute("data-theme", theme);
+    if (theme === "aurora") root.classList.add("dark");
   }, [theme]);
 
   const value = {
