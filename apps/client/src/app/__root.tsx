@@ -1,45 +1,102 @@
-import { createRootRoute, Outlet } from "@tanstack/react-router";
+import { createRootRoute, Link, Outlet, useLocation, useMatches } from "@tanstack/react-router";
 import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import RootProvider from "@/providers";
 import { Toaster } from "@/components/sonner";
+import { AppSidebar } from "@/components/app-sidebar";
+import { SidebarInset, SidebarTrigger } from "@/components/sidebar";
+import { ThemeSwitcher } from "@/components/theme-switcher";
+import { ChevronRight } from "lucide-react";
+import { Separator } from "@/components/separator";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/breadcrumb";
 import "@/styles/globals.css";
 
 export const Route = createRootRoute({
   component: RootLayout,
 });
 
+const formatPathSegment = (segment: string): string => {
+  const routeNameMap: Record<string, string> = {
+    dashboard: "Dashboard",
+    streams: "Streams",
+    history: "History",
+    contacts: "Contacts",
+    settings: "Settings",
+  };
+
+  if (routeNameMap[segment.toLowerCase()]) {
+    return routeNameMap[segment.toLowerCase()];
+  }
+
+  return segment
+    .split("-")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+};
+
 function RootLayout() {
+  const location = useLocation();
+  const isHomePage = location.pathname === "/";
+
+  const segments = location.pathname?.slice(1).split("/").filter(Boolean) || [];
+
+  if (isHomePage) {
+    return (
+      <RootProvider>
+        <Outlet />
+        <Toaster />
+      </RootProvider>
+    );
+  }
+
   return (
     <RootProvider>
-      {/* Responsive container - mobile-first with desktop support */}
-      <div className="min-h-screen bg-black flex justify-center">
-        <div className="w-full max-w-7xl bg-[#030305] min-h-screen flex flex-col relative overflow-hidden">
-          {/* Background Effects - Liquid Aurora */}
-          <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden">
-            {/* Deep Void Base */}
-            <div className="absolute inset-0 bg-[#020204]" />
+      <AppSidebar />
+      <SidebarInset>
+        <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12 sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b">
+          <div className="flex items-center gap-2 px-4">
+            <SidebarTrigger className="-ml-1" />
+            <Separator orientation="vertical" className="mr-2 h-4" />
+            <Breadcrumb>
+              <BreadcrumbList>
+                {segments.map((segment, index) => {
+                  const isLast = index === segments.length - 1;
+                  const href = "/" + segments.slice(0, index + 1).join("/");
+                  const formattedSegment = formatPathSegment(segment);
 
-            {/* Liquid Mesh Gradients - The "Aurora" */}
-            <div className="absolute top-[-10%] left-[-10%] w-[120vw] h-[120vw] md:w-[50vw] md:h-[50vw] bg-indigo-500/20 blur-[120px] rounded-full mix-blend-screen animate-aurora" />
-            <div className="absolute top-[10%] right-[-10%] w-[140vw] h-[140vw] md:w-[60vw] md:h-[60vw] bg-cyan-600/15 blur-[120px] rounded-full mix-blend-screen animate-aurora delay-[2000ms]" />
-            <div className="absolute bottom-[-10%] left-[20%] w-[150vw] h-[150vw] md:w-[70vw] md:h-[50vw] bg-violet-600/15 blur-[140px] rounded-full mix-blend-screen animate-aurora delay-[4000ms]" />
-
-            {/* Subtle Noise Texture */}
-            <div className="absolute inset-0 opacity-[0.03] mix-blend-overlay bg-noise pointer-events-none" />
+                  return (
+                    <div key={href} className="flex items-center gap-1.5">
+                      {index > 0 && <BreadcrumbSeparator className="hidden md:block" />}
+                      {isLast ? (
+                        <BreadcrumbItem>
+                          <BreadcrumbPage>{formattedSegment}</BreadcrumbPage>
+                        </BreadcrumbItem>
+                      ) : (
+                        <BreadcrumbItem className="hidden md:block">
+                          <BreadcrumbLink asChild>
+                            <Link to={href}>{formattedSegment}</Link>
+                          </BreadcrumbLink>
+                        </BreadcrumbItem>
+                      )}
+                    </div>
+                  );
+                })}
+              </BreadcrumbList>
+            </Breadcrumb>
           </div>
-
-          <main className="flex-1 relative z-10">
-            <Outlet />
-          </main>
-        </div>
-      </div>
+        </header>
+        <main className="flex-1 p-8">
+          <Outlet />
+        </main>
+      </SidebarInset>
       <Toaster />
-      <TanStackRouterDevtools />
-      <style>{`
-        .bg-noise {
-          background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.7' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='1'/%3E%3C/svg%3E");
-        }
-      `}</style>
+      {/* <TanStackRouterDevtools /> */}
     </RootProvider>
   );
 }

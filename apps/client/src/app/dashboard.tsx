@@ -1,31 +1,34 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { usePrivy } from "@privy-io/react-auth";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/card";
-import { Button } from "@/components/button";
-import {
-  Activity,
-  DollarSign,
-  TrendingUp,
-  Sparkles,
-  Plus,
-  Loader2,
-  ArrowUpRight,
-} from "lucide-react";
-import { useLogout, useStreams, useAccount } from "@/hooks";
-import { BottomNav } from "@/components/bottom-nav";
+import { Plus, Droplets, Activity, TrendingUp } from "lucide-react";
+import { useStreams } from "@/hooks";
 import { useMemo } from "react";
-import { formatCurrency, formatRelativeTime, truncateAddress } from "@/utils";
+import { StreamCard } from "@/components/stream-card";
+import { YieldReactor } from "@/components/yield-reactor";
+import { truncateAddress } from "@/utils";
 
 export const Route = createFileRoute("/dashboard")({
   component: DashboardPage,
 });
 
 function DashboardPage() {
-  const { user } = usePrivy();
   const navigate = useNavigate();
-  const logout = useLogout();
-  const { data: streams, isLoading: streamsLoading } = useStreams();
-  const { data: account, isLoading: accountLoading } = useAccount();
+  const { data: streams } = useStreams();
+
+  const formattedStreams = useMemo(() => {
+    if (!streams) return [];
+    return streams.map((s) => ({
+      id: s.id,
+      recipientName: truncateAddress(s.recipientAddress),
+      recipientAddress: truncateAddress(s.recipientAddress),
+      avatarFallback: s.recipientAddress.slice(0, 2).toUpperCase(),
+      status: s.status as any,
+      streamedAmount: s.vestedAmount,
+      streamedCurrency: s.asset,
+      rateAmount: s.amount / 30, // Mock: amount per 30 days
+      rateInterval: "/mo",
+      progress: (s.vestedAmount / s.amount) * 100,
+    }));
+  }, [streams]);
 
   const stats = useMemo(() => {
     if (!streams) {
@@ -33,227 +36,120 @@ function DashboardPage() {
         activeStreams: 0,
         totalVested: 0,
         yieldEarned: 0,
-        avgYieldAPY: 0,
+        yieldAPY: 12.5,
+        outflowRate: 0.0245,
       };
     }
 
-    const activeStreams = streams.filter(
-      (s) => s.status === "ACTIVE" || s.status === "PENDING"
-    ).length;
-
+    const activeStreams = streams.filter((s) => s.status === "ACTIVE").length;
     const totalVested = streams.reduce((sum, s) => sum + s.amount, 0);
     const yieldEarned = streams.reduce((sum, s) => sum + s.yieldEarned, 0);
-
-    // Calculate average APY (simplified - would need time-weighted calculation in production)
-    const avgYieldAPY = totalVested > 0 ? (yieldEarned / totalVested) * 100 : 0;
 
     return {
       activeStreams,
       totalVested,
       yieldEarned,
-      avgYieldAPY,
+      yieldAPY: 12.5,
+      outflowRate: 0.0245,
     };
   }, [streams]);
 
-  const recentStreams = useMemo(() => {
-    if (!streams) return [];
-    return streams.slice(0, 5);
-  }, [streams]);
-
-  const isLoading = streamsLoading || accountLoading;
-
   return (
-    <div className="min-h-screen p-4 md:p-8 pb-24">
+    <div className="w-full max-w-7xl mx-auto">
       {/* Header */}
-      <div className="mb-6 md:mb-8">
-        <div className="flex items-center justify-between mb-2">
-          <h1 className="text-2xl md:text-3xl font-serif font-light text-white">
-            Dashboard
-          </h1>
-          <Button
-            onClick={logout}
-            variant="ghost"
-            size="sm"
-            className="text-slate-400 hover:text-white"
-          >
-            Logout
-          </Button>
-        </div>
-        <p className="text-sm text-slate-400">
-          Welcome back, {truncateAddress(user?.wallet?.address || "Anon")}
+      <div className="mb-12">
+        <h1 className="text-4xl md:text-5xl font-serif font-light tracking-tight text-foreground mb-3">
+          Dashboard
+        </h1>
+        <p className="text-muted-foreground text-lg">
+          Optimize your capital efficiency using AI-driven yield strategies
         </p>
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-6 md:mb-8">
-        <Card className="bg-white/5 border-white/10 backdrop-blur-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-normal text-slate-400 flex items-center gap-2">
-              <Activity className="w-4 h-4" />
-              Active Streams
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
-            ) : (
-              <p className="text-2xl md:text-3xl font-semibold text-white">
-                {stats.activeStreams}
-              </p>
-            )}
-          </CardContent>
-        </Card>
+      <div className="grid md:grid-cols-3 gap-6 mb-12">
+        {/* Total Outflow with Shader */}
+        <div className="relative p-6 rounded-2xl bg-card border border-border hover:border-primary/30 transition-all overflow-hidden">
+          {/* Shader Background */}
+          <div className="absolute inset-0 opacity-30">
+            <YieldReactor 
+              active={true} 
+              intensity={Math.min(Math.max(70, stats.outflowRate * 150), 300)}
+            />
+          </div>
+          
+          {/* Content */}
+          <div className="relative z-10">
+            <div className="w-12 h-12 rounded-full bg-cyan-500/10 flex items-center justify-center mb-4">
+              <Droplets className="w-6 h-6 text-cyan-400" />
+            </div>
+            <h3 className="text-muted-foreground text-sm mb-2">Total Outflow</h3>
+            <p className="text-3xl font-light text-foreground font-mono">{stats.outflowRate}</p>
+            <p className="text-muted-foreground text-sm mt-1">USDC / sec</p>
+          </div>
+        </div>
 
-        <Card className="bg-white/5 border-white/10 backdrop-blur-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-normal text-slate-400 flex items-center gap-2">
-              <DollarSign className="w-4 h-4" />
-              Total Vested
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
-            ) : (
-              <p className="text-2xl md:text-3xl font-semibold text-white">
-                {formatCurrency(stats.totalVested)}
-              </p>
-            )}
-          </CardContent>
-        </Card>
+        {/* Yield APY */}
+        <div className="p-6 rounded-2xl bg-card border border-border hover:border-primary/30 transition-all">
+          <div className="w-12 h-12 rounded-full bg-emerald-500/10 flex items-center justify-center mb-4">
+            <TrendingUp className="w-6 h-6 text-emerald-400" />
+          </div>
+          <h3 className="text-muted-foreground text-sm mb-2">Avg. Yield APY</h3>
+          <p className="text-3xl font-light text-emerald-400 font-mono">+{stats.yieldAPY}%</p>
+          <p className="text-muted-foreground text-sm mt-1">Optimized via Aave V3</p>
+        </div>
 
-        <Card className="bg-white/5 border-white/10 backdrop-blur-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-normal text-slate-400 flex items-center gap-2">
-              <Sparkles className="w-4 h-4" />
-              Yield Earned
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
-            ) : (
-              <p className="text-2xl md:text-3xl font-semibold text-white">
-                {formatCurrency(stats.yieldEarned)}
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="bg-white/5 border-white/10 backdrop-blur-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-normal text-slate-400 flex items-center gap-2">
-              <TrendingUp className="w-4 h-4" />
-              Avg Yield APY
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <Loader2 className="w-6 h-6 animate-spin text-slate-400" />
-            ) : (
-              <p className="text-2xl md:text-3xl font-semibold text-white">
-                {stats.avgYieldAPY.toFixed(2)}%
-              </p>
-            )}
-          </CardContent>
-        </Card>
+        {/* Active Streams */}
+        <div className="p-6 rounded-2xl bg-card border border-border hover:border-primary/30 transition-all">
+          <div className="w-12 h-12 rounded-full bg-indigo-500/10 flex items-center justify-center mb-4">
+            <Activity className="w-6 h-6 text-indigo-400" />
+          </div>
+          <h3 className="text-muted-foreground text-sm mb-2">Active Streams</h3>
+          <p className="text-3xl font-light text-foreground font-mono">{stats.activeStreams}</p>
+          <p className="text-emerald-400 text-sm mt-1">Processing</p>
+        </div>
       </div>
 
-      {/* Recent Streams */}
-      <Card className="bg-white/5 border-white/10 backdrop-blur-sm mb-6">
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-white">Recent Streams</CardTitle>
-            <Button
-              onClick={() => navigate({ to: "/streams" })}
-              variant="ghost"
-              size="sm"
-              className="text-cyan-400 hover:text-cyan-300"
-            >
-              View All
-              <ArrowUpRight className="w-4 h-4 ml-1" />
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="w-8 h-8 animate-spin text-cyan-400" />
-            </div>
-          ) : recentStreams.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12">
-              <div className="relative mb-6">
-                <div className="absolute inset-0 bg-gradient-to-r from-cyan-500/20 to-blue-500/20 blur-2xl rounded-full" />
-                <div className="relative bg-gradient-to-br from-cyan-500/10 to-blue-500/10 p-6 rounded-full border border-cyan-500/20">
-                  <Sparkles className="w-12 h-12 text-cyan-400" />
-                </div>
-              </div>
-              <h3 className="text-white font-medium text-lg mb-2">No streams yet</h3>
-              <p className="text-slate-400 text-sm text-center mb-6 max-w-xs">
-                Create your first vesting stream and start earning yield on unvested funds!
-              </p>
-              <Button
-                onClick={() => navigate({ to: "/streams/create" })}
-                className="bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white border-0 flex items-center gap-2"
-              >
-                <Plus className="w-4 h-4" />
-                Create Stream
-              </Button>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {recentStreams.map((stream) => (
-                <button
-                  key={stream.id}
-                  onClick={() => navigate({ to: `/stream/${stream.id}` })}
-                  className="w-full text-left p-3 md:p-4 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 transition-colors"
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex-1">
-                      <h4 className="text-white font-medium text-sm md:text-base">
-                        {truncateAddress(stream.recipientAddress)}
-                      </h4>
-                      <p className="text-slate-400 text-xs md:text-sm">
-                        {formatCurrency(stream.amount)} • {stream.asset}
-                      </p>
-                    </div>
-                    <span
-                      className={`text-xs px-2 py-1 rounded-full ${getStatusColor(stream.status)}`}
-                    >
-                      {stream.status}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3 text-xs text-slate-500">
-                    <span>Yield: {formatCurrency(stream.yieldEarned)}</span>
-                    <span>•</span>
-                    <span>{formatRelativeTime(stream.createdAt)}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* Streams Section */}
+      <div>
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
+            Active Streams
+          </h2>
+          <button
+            onClick={() => navigate({ to: "/streams" })}
+            className="flex items-center gap-2 px-8 py-4 text-lg rounded-full bg-gradient-to-r from-[#0B1221] to-[#0f172a] border border-cyan-500/30 text-white font-medium hover:border-cyan-400/60 transition-all shadow-[0_0_25px_-8px_rgba(6,182,212,0.4)] hover:shadow-[0_0_35px_-5px_rgba(6,182,212,0.6)]"
+          >
+            <Plus className="w-4 h-4" />
+            <span>New Stream</span>
+          </button>
+        </div>
 
-      {/* Bottom Navigation */}
-      <BottomNav />
+        {formattedStreams.length > 0 ? (
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {formattedStreams.map((stream) => (
+              <StreamCard key={stream.id} stream={stream} />
+            ))}
+          </div>
+        ) : (
+          <div className="p-12 rounded-2xl bg-card border border-border text-center">
+            <div className="w-12 h-12 rounded-full bg-cyan-500/10 flex items-center justify-center mx-auto mb-4">
+              <Droplets className="w-6 h-6 text-cyan-400" />
+            </div>
+            <h3 className="text-foreground font-medium mb-2">No active streams</h3>
+            <p className="text-muted-foreground text-sm max-w-md mx-auto mb-6">
+              Create a new stream to start vesting funds with automated yield optimization.
+            </p>
+            <button
+              onClick={() => navigate({ to: "/streams" })}
+              className="inline-flex items-center gap-2 px-8 py-4 text-lg rounded-full bg-gradient-to-r from-[#0B1221] to-[#0f172a] border border-cyan-500/30 text-white font-medium hover:border-cyan-400/60 transition-all shadow-[0_0_25px_-8px_rgba(6,182,212,0.4)] hover:shadow-[0_0_35px_-5px_rgba(6,182,212,0.6)]"
+            >
+              <Plus className="w-4 h-4" />
+              Create First Stream
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
-}
-
-function getStatusColor(status: string) {
-  switch (status) {
-    case "PENDING":
-      return "bg-yellow-500/20 text-yellow-400";
-    case "ACTIVE":
-      return "bg-green-500/20 text-green-400";
-    case "PAUSED":
-      return "bg-blue-500/20 text-blue-400";
-    case "COMPLETED":
-      return "bg-purple-500/20 text-purple-400";
-    case "CANCELLED":
-      return "bg-red-500/20 text-red-400";
-    default:
-      return "bg-slate-500/20 text-slate-400";
-  }
 }
