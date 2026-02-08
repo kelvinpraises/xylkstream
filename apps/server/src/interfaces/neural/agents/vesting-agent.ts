@@ -18,7 +18,7 @@ export const vestingAgent = new Agent({
         scope: "resource",
         template: [
           "# Account Profile",
-          "- **Wallet Address**:",
+          "- **Wallet Addresses**:",
           "- **Risk Tolerance**:",
           "- **Yield Strategy**:",
           "- **Active Streams**:",
