@@ -1,7 +1,7 @@
 export interface UserFeedbackPromptParams {
   goal: string;
   accountId: number;
-  streamId?: number;
+  streamId?: number | null;
   currentState: any;
   userMessage: string;
 }
