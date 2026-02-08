@@ -9,12 +9,11 @@ import {
   buildScheduledTaskPrompt,
   buildStreamCreationPrompt,
   buildUserFeedbackPrompt,
-  buildYieldOptimizationPrompt,
 } from "@/interfaces/neural/prompts";
+import { pluginService } from "@/services/system/plugin/plugin-service";
 import { accountService } from "@/services/vesting/account-service";
 import { auditLogService } from "@/services/vesting/audit-log-service";
 import { streamService } from "@/services/vesting/stream-service";
-import { pluginService } from "@/services/system/plugin/plugin-service";
 import type { ScheduledEvent } from "@/types/scheduled-event";
 
 const runningAgentTasks = new Map<string, AbortController>();
@@ -117,9 +116,7 @@ export const neuralAgent = {
         },
       );
 
-      console.log(
-        `[neural] Stream creation complete (${Date.now() - startTime}ms)`,
-      );
+      console.log(`[neural] Stream creation complete (${Date.now() - startTime}ms)`);
       return streamId;
     } catch (error) {
       if (error instanceof Error && error.name !== "AbortError") {
@@ -149,7 +146,7 @@ export const neuralAgent = {
 
     await auditLogService.createAuditLog({
       accountId,
-      streamId: streamId ?? undefined,
+      streamId: streamId ?? null,
       type: "USER_FEEDBACK",
       content: { feedback },
       isInternal: false,
@@ -187,7 +184,7 @@ export const neuralAgent = {
     const systemPrompt = buildUserFeedbackPrompt({
       goal: streamId ? "Create vesting stream" : "Complete your current task",
       accountId,
-      streamId: streamId ?? undefined,
+      streamId: streamId ?? null,
       currentState,
       userMessage: feedback,
     });
@@ -215,7 +212,7 @@ export const neuralAgent = {
 
         await auditLogService.createAuditLog({
           accountId,
-          streamId: streamId ?? undefined,
+          streamId: streamId ?? null,
           type: "AI_THOUGHT",
           content: {
             thought: `I encountered an error while processing your feedback: ${error instanceof Error ? error.message : "Unknown error"}. Please try again or contact support if this persists.`,
@@ -295,5 +292,99 @@ export const neuralAgent = {
       return true;
     }
     return false;
+  },
+
+  /**
+   * Process stream distribution (scheduled event)
+   */
+  async processDistribution(streamId: number): Promise<void> {
+    const stream = await streamService.getStream(streamId);
+    const account = await accountService.getAccount(stream.account_id);
+
+    // Calculate amount to distribute
+    const now = new Date();
+    const lastDistribution = stream.last_distribution_at || stream.start_date;
+    const timeSinceLastDistribution = now.getTime() - new Date(lastDistribution).getTime();
+    const periodsElapsed = Math.floor(timeSinceLastDistribution / (stream.period_duration * 1000));
+    const amountToDistribute = stream.amount_per_period * periodsElapsed;
+
+    if (amountToDistribute > 0) {
+      await streamService.markDistributed(streamId, amountToDistribute);
+      
+      await auditLogService.createAuditLog({
+        accountId: stream.account_id,
+        streamId,
+        type: "DISTRIBUTION_MADE",
+        content: {
+          amount: amountToDistribute,
+          recipient: stream.recipient_address,
+          periodsElapsed,
+        },
+        isInternal: false,
+      });
+    }
+  },
+
+  /**
+   * Complete stream (scheduled event)
+   */
+  async completeStream(streamId: number): Promise<void> {
+    const stream = await streamService.getStream(streamId);
+    
+    await streamService.transitionStatus(streamId, "COMPLETED");
+    
+    await auditLogService.createAuditLog({
+      accountId: stream.account_id,
+      streamId,
+      type: "STREAM_COMPLETED",
+      content: {
+        totalDistributed: stream.total_distributed,
+        yieldEarned: stream.yield_earned,
+      },
+      isInternal: false,
+    });
+  },
+
+  /**
+   * Optimize yield for account (scheduled event)
+   */
+  async optimizeYield(accountId: number): Promise<void> {
+    const account = await accountService.getAccount(accountId);
+    const policy = account.policy_json;
+    
+    await auditLogService.createAuditLog({
+      accountId,
+      streamId: null,
+      type: "AI_OPTIMIZATION",
+      content: {
+        reasoning: "Scheduled yield optimization check",
+        action: "analyze_liquidity",
+      },
+      isInternal: true,
+    });
+
+    // This would trigger the AI agent to analyze and optimize
+    // For now, just log the event
+  },
+
+  /**
+   * Cancel stale draft (scheduled event)
+   */
+  async cancelDraft(streamId: number): Promise<void> {
+    const stream = await streamService.getStream(streamId);
+    
+    if (stream.status === "DRAFTING") {
+      await streamService.transitionStatus(streamId, "CANCELLED");
+      
+      await auditLogService.createAuditLog({
+        accountId: stream.account_id,
+        streamId,
+        type: "STREAM_CANCELLED",
+        content: {
+          reason: "Draft timeout (24 hours)",
+        },
+        isInternal: false,
+      });
+    }
   },
 };
