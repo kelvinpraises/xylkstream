@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { PrivyProvider } from "./privy-provider";
 import { RpcSessionProvider } from "./rpc-session-provider";
 import { ThemeProvider } from "./theme-provider";
+import { SidebarProvider } from "@/components/sidebar";
 
 interface RootProviderProps {
   children: ReactNode;
@@ -22,7 +23,9 @@ export default function RootProvider({ children }: RootProviderProps) {
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>
         <PrivyProvider>
-          <RpcSessionProvider>{children}</RpcSessionProvider>
+          <RpcSessionProvider>
+            <SidebarProvider>{children}</SidebarProvider>
+          </RpcSessionProvider>
         </PrivyProvider>
       </QueryClientProvider>
     </ThemeProvider>
