@@ -43,8 +43,8 @@ const streamController = {
       const unsubscribe = auditLogEmitter.onStreamAuditLog(
         streamId,
         (auditLog: AuditLog) => {
-          // Skip internal logs (is_internal = 1 in SQLite)
-          if (auditLog.is_internal === 1 || auditLog.is_internal === true) {
+          // Skip internal logs
+          if (auditLog.is_internal) {
             return;
           }
 
