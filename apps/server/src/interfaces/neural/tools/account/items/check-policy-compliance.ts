@@ -9,7 +9,7 @@ export const checkPolicyCompliance = createTool({
   inputSchema: z.object({
     accountId: z.number(),
     action: z.enum(["create_stream", "modify_stream", "yield_optimization"]),
-    parameters: z.record(z.any()).describe("Action parameters to validate"),
+    parameters: z.record(z.string(), z.any()).describe("Action parameters to validate"),
   }),
   execute: async (inputData) => {
     const account = await accountService.getAccount(inputData.accountId);
@@ -23,20 +23,16 @@ export const checkPolicyCompliance = createTool({
       const { amount, recipientAddress } = inputData.parameters;
 
       // Check budget limits
-      if (policy.budget_limits?.max_stream_amount && amount > policy.budget_limits.max_stream_amount) {
+      if (policy.budget_limits?.max_stream_budget && typeof amount === 'number' && amount > policy.budget_limits.max_stream_budget) {
         violations.push(
-          `Amount ${amount} exceeds max stream amount ${policy.budget_limits.max_stream_amount}`,
+          `Amount ${amount} exceeds max stream budget ${policy.budget_limits.max_stream_budget}`,
         );
       }
 
-      // Check whitelist if exists
-      if (policy.recipient_whitelist && !policy.recipient_whitelist.includes(recipientAddress)) {
-        violations.push(`Recipient ${recipientAddress} not in whitelist`);
-      }
-
-      // Check balance
-      if (amount > account.balance) {
-        violations.push(`Insufficient balance: ${account.balance} < ${amount}`);
+      // Check balance (wallet_balances is a Record<string, string>)
+      const totalBalance = Object.values(account.wallet_balances).reduce((sum, bal) => sum + parseFloat(bal || '0'), 0);
+      if (typeof amount === 'number' && amount > totalBalance) {
+        violations.push(`Insufficient balance: ${totalBalance} < ${amount}`);
       }
     }
 
@@ -47,7 +43,6 @@ export const checkPolicyCompliance = createTool({
       policy: {
         budgetLimits: policy.budget_limits,
         plugins: policy.plugins,
-        riskTolerance: policy.risk_tolerance,
       },
     };
   },

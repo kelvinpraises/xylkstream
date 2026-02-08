@@ -12,17 +12,20 @@ export const viewAccountState = createTool({
   }),
   execute: async (inputData) => {
     const account = await accountService.getAccount(inputData.accountId);
-    const streams = await streamService.listStreams(inputData.accountId);
+    const streams = await streamService.listStreamsForAccount(inputData.accountId);
 
     const totalYieldEarned = streams.reduce(
       (sum, stream) => sum + (stream.yield_earned || 0),
       0,
     );
 
+    const totalBalance = Object.values(account.wallet_balances).reduce((sum, bal) => sum + parseFloat(bal || '0'), 0);
+
     return {
       accountId: account.id,
       walletAddress: account.wallet_address,
-      balance: account.balance,
+      balance: totalBalance,
+      walletBalances: account.wallet_balances,
       totalYieldEarned,
       policy: account.policy_json,
       streamsCount: {
