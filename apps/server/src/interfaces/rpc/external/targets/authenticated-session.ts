@@ -192,7 +192,7 @@ export class AuthenticatedSession extends RpcTarget {
     console.log("[RPC] Prompt:", params.prompt);
     
     // Create stream with user prompt
-    const streamId = await neuralAgent.createStream(this.accountId, params.prompt);
+    const streamId = await neuralAgent.createStreamFromNaturalLanguage(this.accountId, params.prompt);
 
     console.log("[RPC] Stream created with ID:", streamId);
 
