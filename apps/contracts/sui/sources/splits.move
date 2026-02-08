@@ -157,8 +157,15 @@ fun ensure_state_exists(
 fun ensure_balance_exists(
     state: &mut SplitsState,
     fa_metadata: address,
-    _ctx: &mut TxContext,
+    ctx: &mut TxContext,
 ) {
+    // Check if balances dynamic field exists first
+    if (!dynamic_field::exists_(&state.id, b"balances")) {
+        let balances = table::new<address, SplitsBalance>(ctx);
+        dynamic_field::add(&mut state.id, b"balances", balances);
+        return
+    };
+
     let balances = dynamic_field::borrow_mut<vector<u8>, Table<address, SplitsBalance>>(
         &mut state.id,
         b"balances",

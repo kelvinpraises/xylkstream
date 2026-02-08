@@ -3,7 +3,6 @@ module xylkstream::drips;
 use movemate::i128::{Self, I128};
 use sui::clock::Clock;
 use sui::coin::{Self, Coin};
-use sui::dynamic_field;
 use sui::event;
 use sui::table::{Self, Table};
 use xylkstream::driver_utils::{Self, AccountMetadata};
@@ -17,8 +16,8 @@ use xylkstream::streams::{Self, StreamReceiver};
 /// The total amount the protocol can store of each token (u128 max).
 const MAX_TOTAL_BALANCE: u128 = 340282366920938463463374607431768211455;
 
-/// Default cycle length: 1 week (604800 seconds)
-const DEFAULT_CYCLE_SECS: u64 = 604800;
+/// Default cycle length: 10 seconds (for testing - production should use 604800 = 1 week)
+const DEFAULT_CYCLE_SECS: u64 = 10;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                                   ERRORS
@@ -41,6 +40,7 @@ const E_INSUFFICIENT_VAULT_BALANCE: u64 = 5;
 
 /// Global shared registry per token type
 /// Coordinates streams and splits, manages balances and vault
+#[allow(lint(coin_field))]
 public struct DripsRegistry<phantom T> has key {
     id: sui::object::UID,
     /// The balance of each account currently stored in the protocol
@@ -616,7 +616,7 @@ public(package) fun transfer_to_yield_manager<T>(
 public(package) fun return_from_yield_manager<T>(
     drips_registry: &mut DripsRegistry<T>,
     yield_manager: &mut xylkstream::yield_manager::YieldManager<T>,
-    account_id: u256,
+    _account_id: u256,
     amount: u128,
     ctx: &mut TxContext,
 ) {

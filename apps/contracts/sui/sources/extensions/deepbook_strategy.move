@@ -12,7 +12,6 @@ module xylkstream::deepbook_strategy;
 
 use sui::coin::{Self, Coin};
 use sui::event;
-use sui::clock::Clock;
 use xylkstream::yield_manager::{Self, YieldManager};
 
 // DeepBook Margin imports (mainnet addresses)
@@ -22,18 +21,21 @@ use xylkstream::yield_manager::{Self, YieldManager};
 // Note: In production, uncomment these imports:
 // use deepbook_margin::margin_pool::{Self, MarginPool, SupplierCap};
 // use deepbook_margin::margin_registry::{Self, MarginRegistry};
+// use sui::clock::Clock;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                                   ERRORS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const E_INSUFFICIENT_BALANCE: u64 = 1;
 const E_WRONG_POOL: u64 = 2;
-const E_SUPPLY_CAP_EXCEEDED: u64 = 3;
-const E_RATE_LIMIT_EXCEEDED: u64 = 4;
-const E_NOT_ENOUGH_LIQUIDITY: u64 = 5;
-const E_INVALID_PARAMS: u64 = 6;
 const E_ZERO_AMOUNT: u64 = 7;
+
+// Reserved for future use when DeepBook integration is enabled:
+// const E_INSUFFICIENT_BALANCE: u64 = 1;
+// const E_SUPPLY_CAP_EXCEEDED: u64 = 3;
+// const E_RATE_LIMIT_EXCEEDED: u64 = 4;
+// const E_NOT_ENOUGH_LIQUIDITY: u64 = 5;
+// const E_INVALID_PARAMS: u64 = 6;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //                              STORAGE & TYPES
@@ -177,8 +179,8 @@ fun decode_params(_data: &vector<u8>): StrategyParams {
 
 /// Helper to convert type to bytes
 fun type_to_bytes<T>(): vector<u8> {
-    // In production: use type_name::get<T>().into_string().into_bytes()
-    sui::bcs::to_bytes(&std::type_name::get<T>())
+    // Use the correct API name
+    sui::bcs::to_bytes(&std::type_name::with_original_ids<T>())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -208,6 +210,10 @@ public fun invest<Asset>(
     
     assert!(amount > 0, E_ZERO_AMOUNT);
 
+    // Store params fields before moving
+    let margin_pool_id = params.margin_pool_id;
+    let referral_id = params.referral_id;
+
     // 1. Open position in YieldManager (get coins + hot potato receipt)
     let (coins, receipt) = yield_manager::position_open(
         yield_manager,
@@ -236,15 +242,16 @@ public fun invest<Asset>(
 
     event::emit(PositionOpened {
         strategy_id,
-        margin_pool_id: params.margin_pool_id,
+        margin_pool_id,
         asset_type: type_to_bytes<Asset>(),
         deposited_amount: (amount as u64),
         supply_shares: 0,  // Will be set in execute_investment
-        referral_id: params.referral_id,
+        referral_id,
     });
 }
 
 /// Execute investment logic - supply to DeepBook MarginPool
+#[allow(unused_mut_parameter)]
 fun execute_investment<Asset>(
     _strategy: &DeepBookStrategy,
     coins: Coin<Asset>,
@@ -303,23 +310,32 @@ public fun withdraw<Asset>(
 ) {
     let strategy_id = object::id(strategy);
 
-    // 1. Borrow position (read-only)
-    let position = yield_manager::borrow_inner_position<
-        Asset,
-        DeepBookStrategyType,
-        DeepBookPosition,
-    >(yield_manager, strategy_id);
+    // 1. Borrow position (read-only) and extract needed data
+    let margin_pool_id = {
+        let position = yield_manager::borrow_inner_position<
+            Asset,
+            DeepBookStrategyType,
+            DeepBookPosition,
+        >(yield_manager, strategy_id);
+        position.margin_pool_id
+    };
 
     // 2. Withdraw from DeepBook MarginPool
     let (withdrawn_coins, redeemed_shares, yield_earned) = execute_withdrawal<Asset>(
         strategy,
-        position,
+        yield_manager::borrow_inner_position<
+            Asset,
+            DeepBookStrategyType,
+            DeepBookPosition,
+        >(yield_manager, strategy_id),
         amount,
         // registry,      // Uncomment in production
         // margin_pool,   // Uncomment in production
         // clock,         // Uncomment in production
         ctx,
     );
+
+    let withdrawn_amount = coin::value(&withdrawn_coins);
 
     // 3. Return coins to YieldManager
     yield_manager::position_close<Asset, DeepBookStrategyType, DeepBookPosition>(
@@ -331,8 +347,8 @@ public fun withdraw<Asset>(
 
     event::emit(PositionClosed {
         strategy_id,
-        margin_pool_id: position.margin_pool_id,
-        withdrawn_amount: coin::value(&withdrawn_coins),
+        margin_pool_id,
+        withdrawn_amount,
         redeemed_shares,
         yield_earned,
     });
@@ -419,17 +435,24 @@ public fun force_withdraw<Asset>(
         E_WRONG_POOL,
     );
 
-    // 2. Borrow position
-    let position = yield_manager::borrow_inner_position<
-        Asset,
-        DeepBookStrategyType,
-        DeepBookPosition,
-    >(yield_manager, strategy_id);
+    // 2. Extract margin_pool_id before withdrawal
+    let margin_pool_id = {
+        let position = yield_manager::borrow_inner_position<
+            Asset,
+            DeepBookStrategyType,
+            DeepBookPosition,
+        >(yield_manager, strategy_id);
+        position.margin_pool_id
+    };
 
     // 3. Withdraw from DeepBook
     let (withdrawn_coins, _redeemed_shares, _yield_earned) = execute_withdrawal<Asset>(
         strategy,
-        position,
+        yield_manager::borrow_inner_position<
+            Asset,
+            DeepBookStrategyType,
+            DeepBookPosition,
+        >(yield_manager, strategy_id),
         amount,
         // registry,      // Uncomment in production
         // margin_pool,   // Uncomment in production
@@ -447,7 +470,7 @@ public fun force_withdraw<Asset>(
 
     event::emit(ForceWithdrawalCompleted {
         strategy_id,
-        margin_pool_id: position.margin_pool_id,
+        margin_pool_id,
         recipient_account_id: account_id,
         amount: (amount as u64),
     });

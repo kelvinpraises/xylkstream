@@ -26,6 +26,7 @@ const E_WRONG_STRATEGY: u64 = 9;
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// YieldManager owned by a single app owner
+#[allow(lint(coin_field))]
 public struct YieldManager<phantom T> has key {
     id: UID,
     /// Vault holding owner's funds
@@ -377,6 +378,7 @@ public fun position_create<T, StrategyType, InnerPosition: store>(
 
 /// Close position - return coins from strategy
 /// Strategy returns coins, YieldManager determines how much principal to deduct
+#[allow(unused_type_parameter)]
 public fun position_close<T, StrategyType, InnerPosition: store>(
     manager: &mut YieldManager<T>,
     strategy_id: ID,
@@ -472,6 +474,7 @@ public fun get_position_amount<T, StrategyType>(
 }
 
 /// Borrow inner position (for strategy to read)
+#[allow(unused_type_parameter)]
 public fun borrow_inner_position<T, StrategyType, InnerPosition: store>(
     manager: &YieldManager<T>,
     strategy_id: ID,
