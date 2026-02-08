@@ -1,7 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 
-import { scheduledEventService } from "@/services/system/scheduled-event-service";
+import { enqueueScheduledEvent } from "@/utils/scheduled-events";
 
 export const scheduleAgentTask = createTool({
   id: "scheduleAgentTask",
@@ -29,17 +29,18 @@ export const scheduleAgentTask = createTool({
     const accountId = context?.requestContext?.get("accountId") as number;
     const streamId = context?.requestContext?.get("streamId") as number | undefined;
 
-    await scheduledEventService.createScheduledEvent({
-      entityType: streamId ? "stream" : "account",
+    await enqueueScheduledEvent({
+      entityType: streamId ? "vesting_stream" : "vesting_account",
       entityId: streamId ?? accountId,
-      eventType: "AGENT_TASK",
-      scheduledAt: new Date(inputData.scheduledAt),
+      eventType: "agent.scheduled",
+      dueAt: new Date(inputData.scheduledAt),
       metadata: {
         accountId,
         streamId,
         taskDescription: inputData.taskDescription,
         contextToRemember: inputData.contextToRemember,
       },
+      description: inputData.taskDescription,
     });
 
     return {

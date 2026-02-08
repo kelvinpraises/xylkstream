@@ -36,7 +36,7 @@ export const logAIThought = createTool({
 
     await auditLogService.createAuditLog({
       accountId,
-      streamId: inputData.streamId,
+      streamId: inputData.streamId ?? null,
       type: "AI_THOUGHT",
       content: { thought: inputData.thought },
       confidenceScore: inputData.confidenceScore,
