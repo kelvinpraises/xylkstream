@@ -12,20 +12,28 @@ export const queryStreams = createTool({
     recipientAddress: z.string().optional(),
   }),
   execute: async (inputData) => {
-    const streams = await streamService.listStreams(inputData.accountId, {
+    const streams = await streamService.listStreamsForAccount(inputData.accountId, {
       status: inputData.status,
-      recipientAddress: inputData.recipientAddress,
     });
 
+    // Filter by recipient if provided
+    const filteredStreams = inputData.recipientAddress
+      ? streams.filter(s => s.recipient_address === inputData.recipientAddress)
+      : streams;
+
     return {
-      count: streams.length,
-      streams: streams.map((s) => ({
+      count: filteredStreams.length,
+      streams: filteredStreams.map((s) => ({
         id: s.id,
         recipientAddress: s.recipient_address,
-        amount: s.amount,
+        totalAmount: s.total_amount,
+        amountPerPeriod: s.amount_per_period,
+        periodDuration: s.period_duration,
         status: s.status,
-        startTime: s.start_time,
-        duration: s.duration,
+        startDate: s.start_date,
+        endDate: s.end_date,
+        totalDistributed: s.total_distributed,
+        yieldEarned: s.yield_earned,
       })),
     };
   },

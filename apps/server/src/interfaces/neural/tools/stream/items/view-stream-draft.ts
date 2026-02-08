@@ -15,12 +15,13 @@ export const viewStreamDraft = createTool({
     return {
       streamId: stream.id,
       recipientAddress: stream.recipient_address,
-      amount: stream.amount,
-      startTime: stream.start_time,
-      duration: stream.duration,
-      cliffDuration: stream.cliff_duration,
+      totalAmount: stream.total_amount,
+      amountPerPeriod: stream.amount_per_period,
       periodDuration: stream.period_duration,
+      startDate: stream.start_date,
+      endDate: stream.end_date,
       status: stream.status,
+      assetId: stream.asset_id,
     };
   },
 });
