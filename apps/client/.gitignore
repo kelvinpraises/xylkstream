@@ -27,6 +27,10 @@ dist-ssr
 .env
 .env.local
 .env.production
+!.env.example
+
+# Test wallets (contains private keys)
+tests/test-wallets.json
 
 # TanStack Router
 .tanstack
