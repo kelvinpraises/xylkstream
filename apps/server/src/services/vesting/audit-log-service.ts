@@ -29,7 +29,7 @@ export const auditLogService = {
         type: data.type,
         content: data.content,
         confidence_score: data.confidenceScore ?? null,
-        is_internal: (data.isInternal ?? true) ? 1 : 0,
+        is_internal: data.isInternal ?? true,
         created_at: new Date().toISOString(),
       })
       .returningAll()
@@ -57,8 +57,8 @@ export const auditLogService = {
       .orderBy("created_at", "asc");
 
     if (!includeInternal) {
-      console.log(`[AuditLogService] Adding filter: is_internal = 0`);
-      query = query.where("is_internal", "=", 0);
+      console.log(`[AuditLogService] Adding filter: is_internal = false`);
+      query = query.where("is_internal", "=", false);
     } else {
       console.log(`[AuditLogService] Including all logs (internal and public)`);
     }
@@ -68,13 +68,16 @@ export const auditLogService = {
     console.log(`[AuditLogService] Found ${results.length} logs for stream ${streamId}`);
     
     if (results.length > 0) {
-      console.log(`[AuditLogService] First 3 logs:`, results.slice(0, 3).map(log => ({
-        id: log.id,
-        type: log.type,
-        is_internal: log.is_internal,
-        stream_id: log.stream_id,
-        content_preview: typeof log.content === 'string' ? log.content.substring(0, 50) : JSON.stringify(log.content).substring(0, 50)
-      })));
+      console.log(`[AuditLogService] First 3 logs:`, results.slice(0, 3).map(log => {
+        const content = log.content as any;
+        return {
+          id: log.id,
+          type: log.type,
+          is_internal: log.is_internal,
+          stream_id: log.stream_id,
+          content_preview: typeof content === 'string' ? content.substring(0, 50) : JSON.stringify(content || {}).substring(0, 50)
+        };
+      }));
     } else {
       console.log(`[AuditLogService] No logs found. Checking if ANY logs exist for this stream...`);
       
@@ -112,7 +115,7 @@ export const auditLogService = {
       .orderBy("created_at", "desc");
 
     if (!options?.includeInternal) {
-      query = query.where("is_internal", "=", 0);
+      query = query.where("is_internal", "=", false);
     }
 
     if (options?.limit) {
