@@ -38,12 +38,14 @@ export const userService = {
    */
   async createUser(data: {
     privyDid: string;
+    fid: number;
     username: string;
   }): Promise<User> {
     const user = await db
       .insertInto("users")
       .values({
         privy_did: data.privyDid,
+        fid: data.fid,
         username: data.username,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),

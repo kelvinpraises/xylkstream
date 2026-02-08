@@ -74,11 +74,12 @@ export const authService = {
       return existingUser;
     }
 
-    // Create new user
+    // Create new user with default fid (0 for non-Farcaster users)
     const result = await db
       .insertInto("users")
       .values({
         privy_did: privyDid,
+        fid: 0, // Default FID for non-Farcaster users
         username,
       })
       .returningAll()
